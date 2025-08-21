@@ -1,0 +1,835 @@
+const TaxCalculation = require('../models/TaxCalculation');
+const Transaction = require('../models/Transaction');
+const User = require('../models/User');
+
+class TaxCalculationService {
+  constructor() {
+    // Multi-country support
+    this.supportedCountries = ['US', 'IN'];
+    
+    // US Tax System (2024)
+    this.federalTaxBrackets = [
+      { min: 0, max: 11000, rate: 0.10 },
+      { min: 11000, max: 44725, rate: 0.12 },
+      { min: 44725, max: 95375, rate: 0.22 },
+      { min: 95375, max: 182050, rate: 0.24 },
+      { min: 182050, max: 231250, rate: 0.32 },
+      { min: 231250, max: 578125, rate: 0.35 },
+      { min: 578125, max: Infinity, rate: 0.37 }
+    ];
+
+    // Indian Tax System (FY 2024-25 - New Tax Regime)
+    this.indianTaxBrackets = [
+      { min: 0, max: 300000, rate: 0.00 },      // Up to ₹3 lakh - No tax
+      { min: 300000, max: 700000, rate: 0.05 },  // ₹3-7 lakh - 5%
+      { min: 700000, max: 1000000, rate: 0.10 }, // ₹7-10 lakh - 10%
+      { min: 1000000, max: 1200000, rate: 0.15 }, // ₹10-12 lakh - 15%
+      { min: 1200000, max: 1500000, rate: 0.20 }, // ₹12-15 lakh - 20%
+      { min: 1500000, max: Infinity, rate: 0.30 } // Above ₹15 lakh - 30%
+    ];
+
+    // Indian Tax System (Old Tax Regime with deductions)
+    this.indianTaxBracketsOld = [
+      { min: 0, max: 250000, rate: 0.00 },      // Up to ₹2.5 lakh - No tax
+      { min: 250000, max: 500000, rate: 0.05 },  // ₹2.5-5 lakh - 5%
+      { min: 500000, max: 1000000, rate: 0.20 }, // ₹5-10 lakh - 20%
+      { min: 1000000, max: Infinity, rate: 0.30 } // Above ₹10 lakh - 30%
+    ];
+
+    // 2024 Federal Tax Brackets (Married Filing Jointly)
+    this.federalTaxBracketsMarried = [
+      { min: 0, max: 22000, rate: 0.10 },
+      { min: 22000, max: 89450, rate: 0.12 },
+      { min: 89450, max: 190750, rate: 0.22 },
+      { min: 190750, max: 364200, rate: 0.24 },
+      { min: 364200, max: 462500, rate: 0.32 },
+      { min: 462500, max: 693750, rate: 0.35 },
+      { min: 693750, max: Infinity, rate: 0.37 }
+    ];
+
+    // Self-employment tax rates
+    this.selfEmploymentTaxRate = 0.1413; // 14.13% (12.4% Social Security + 1.45% Medicare)
+    this.additionalMedicareTaxThreshold = 200000; // Additional 0.9% Medicare tax threshold
+    this.additionalMedicareTaxRate = 0.009;
+
+    // Indian GST rates for different services
+    this.indianGSTRates = {
+      digitalServices: 0.18,      // YouTube, streaming, digital content
+      consultingServices: 0.18,   // Consulting, coaching
+      educationalContent: 0.12,   // Educational courses, tutorials
+      softwareServices: 0.18,     // Software development, apps
+      advertisingServices: 0.18,  // Sponsored content, ads
+      exemptServices: 0.00        // Some educational and healthcare content
+    };
+
+    // Indian creator-specific tax rules
+    this.indianCreatorTaxRules = {
+      presumptiveBusinessIncome: {
+        digitalServices: 0.50,     // 50% of income considered profit (Section 44ADA)
+        threshold: 5000000         // ₹50 lakh threshold for presumptive taxation
+      },
+      professionalTax: {
+        maxAnnual: 2500           // Maximum ₹2,500 per year (varies by state)
+      },
+      deductions: {
+        section80C: 150000,       // ₹1.5 lakh (PF, insurance, tax-saving FDs)
+        section80D: 25000,        // ₹25,000 for health insurance (under 60)
+        section80D_senior: 50000, // ₹50,000 for health insurance (60+)
+        section80E: Infinity,     // Education loan interest (no limit)
+        section80G: 0.50,         // 50% deduction for donations
+        homeOfficeFurniture: 100000, // ₹1 lakh per year depreciation
+        internetPhone: 50000,     // ₹50,000 per year for business use
+        equipmentDepreciation: 0.60 // 60% depreciation on computers, cameras
+      },
+      tds: {
+        professionalServices: 0.10, // 10% TDS on professional fees
+        digitalAdvertising: 0.10,   // 10% TDS on digital advertising
+        threshold: 30000            // ₹30,000 threshold for TDS
+      }
+    };
+
+    // Standard deductions for 2024 (US)
+    this.standardDeductions = {
+      single: 13850,
+      married_joint: 27700,
+      married_separate: 13850,
+      head_of_household: 20800
+    };
+
+    // Indian standard deduction
+    this.indianStandardDeduction = 50000; // ₹50,000 for salaried individuals
+
+    // State tax rates by state (2024 estimates)
+    this.stateTaxRates = {
+      'AL': 0.05, 'AK': 0.00, 'AZ': 0.025, 'AR': 0.055, 'CA': 0.093,
+      'CO': 0.044, 'CT': 0.069, 'DE': 0.066, 'FL': 0.00, 'GA': 0.057,
+      'HI': 0.11, 'ID': 0.058, 'IL': 0.0495, 'IN': 0.032, 'IA': 0.084,
+      'KS': 0.057, 'KY': 0.05, 'LA': 0.06, 'ME': 0.075, 'MD': 0.0575,
+      'MA': 0.05, 'MI': 0.0425, 'MN': 0.0985, 'MS': 0.05, 'MO': 0.054,
+      'MT': 0.069, 'NE': 0.068, 'NV': 0.00, 'NH': 0.00, 'NJ': 0.097,
+      'NM': 0.059, 'NY': 0.0865, 'NC': 0.0475, 'ND': 0.029, 'OH': 0.0399,
+      'OK': 0.05, 'OR': 0.099, 'PA': 0.0307, 'RI': 0.0599, 'SC': 0.07,
+      'SD': 0.00, 'TN': 0.00, 'TX': 0.00, 'UT': 0.0495, 'VT': 0.0875,
+      'VA': 0.0575, 'WA': 0.00, 'WV': 0.065, 'WI': 0.0765, 'WY': 0.00
+    };
+
+    // Quarterly due dates for 2024/2025
+    this.quarterlyDueDates = {
+      1: new Date(2024, 3, 15), // April 15, 2024
+      2: new Date(2024, 5, 17), // June 17, 2024  
+      3: new Date(2024, 8, 16), // September 16, 2024
+      4: new Date(2025, 0, 15)  // January 15, 2025
+    };
+
+    // Creator-specific tax knowledge
+    this.creatorTaxRules = {
+      homeOfficeDeduction: {
+        maxSquareFeet: 300,
+        perSquareFootDeduction: 5,
+        maxDeduction: 1500
+      },
+      equipmentDepreciation: {
+        // Section 179 allows immediate expensing up to certain limits
+        section179Limit: 1160000, // 2024 limit
+        commonEquipmentLife: {
+          'camera': 5,
+          'computer': 5,
+          'microphone': 7,
+          'lighting': 7,
+          'furniture': 7
+        }
+      },
+      businessMealDeduction: 0.5, // 50% deductible for business meals
+      autoExpenseOptions: {
+        standardMileageRate: 0.67, // 2024 rate per mile
+        actualExpensePercentage: true // Can use actual expenses instead
+      }
+    };
+  }
+
+  async calculateTaxes(userId, year = new Date().getFullYear(), quarter = null) {
+    try {
+      const user = await User.findById(userId);
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      const country = user.taxInfo?.country || 'US';
+
+      // Calculate period
+      let startDate, endDate;
+      if (quarter) {
+        const quarterStart = new Date(year, (quarter - 1) * 3, 1);
+        const quarterEnd = new Date(year, quarter * 3, 0);
+        startDate = quarterStart;
+        endDate = quarterEnd;
+      } else {
+        startDate = new Date(year, 0, 1);
+        endDate = new Date(year, 11, 31);
+      }
+
+      // Get income and expense data
+      const incomeData = await this.calculateIncome(userId, startDate, endDate);
+      const expenseData = await this.calculateExpenses(userId, startDate, endDate);
+
+      // Calculate based on country
+      if (country === 'IN') {
+        return await this.calculateIndianTaxes(userId, incomeData, expenseData, year, quarter, user);
+      } else {
+        return await this.calculateUSTaxes(userId, incomeData, expenseData, year, quarter, user);
+      }
+
+    } catch (error) {
+      console.error('Tax calculation error:', error);
+      throw error;
+    }
+  }
+
+  async calculateUSTaxes(userId, incomeData, expenseData, year, quarter, user) {
+    // Calculate adjusted gross income
+    const adjustedGrossIncome = incomeData.businessIncome - expenseData.deductibleExpenses;
+    const selfEmploymentIncome = Math.max(0, adjustedGrossIncome);
+
+    // Calculate self-employment tax
+    const selfEmploymentTax = this.calculateSelfEmploymentTax(selfEmploymentIncome);
+
+    // Calculate federal income tax
+    const federalTaxOwed = this.calculateFederalIncomeTax(
+      adjustedGrossIncome, 
+      user.taxInfo.filingStatus
+    );
+
+    // Calculate state tax using improved logic
+    const stateTaxOwed = this.calculateStateTax(
+      adjustedGrossIncome, 
+      user.taxInfo.state,
+      user.taxInfo.stateTaxRate
+    );
+
+    const totalTaxOwed = federalTaxOwed + stateTaxOwed + selfEmploymentTax;
+
+    // Calculate estimated quarterly payment
+    let estimatedQuarterlyPayment;
+    if (quarter) {
+      const annualizedIncome = adjustedGrossIncome * (4 / quarter);
+      const annualTaxLiability = this.calculateAnnualTaxLiability(annualizedIncome, user);
+      estimatedQuarterlyPayment = annualTaxLiability / 4;
+    } else {
+      estimatedQuarterlyPayment = totalTaxOwed / 4;
+    }
+
+    // Calculate tax jar recommendation
+    const taxJarAmount = this.calculateTaxJarRecommendation(
+      incomeData.totalIncome,
+      totalTaxOwed,
+      quarter
+    );
+
+    // Generate recommendations
+    const recommendations = await this.generateRecommendations(
+      userId,
+      incomeData,
+      expenseData,
+      totalTaxOwed,
+      year,
+      quarter
+    );
+
+    // Save calculation
+    const taxCalculation = new TaxCalculation({
+      user: userId,
+      period: { year, quarter },
+      income: incomeData,
+      expenses: expenseData,
+      taxCalculations: {
+        adjustedGrossIncome,
+        selfEmploymentIncome,
+        federalTaxOwed,
+        stateTaxOwed,
+        selfEmploymentTax,
+        totalTaxOwed,
+        estimatedQuarterlyPayment
+      },
+      recommendations: {
+        taxJarAmount,
+        nextQuarterlyDue: this.getNextQuarterlyDueDate(),
+        suggestedDeductions: recommendations.suggestedDeductions,
+        taxStrategy: recommendations.taxStrategy
+      }
+    });
+
+    await taxCalculation.save();
+    return taxCalculation;
+  }
+
+  async calculateIndianTaxes(userId, incomeData, expenseData, year, quarter, user) {
+    const grossIncome = incomeData.businessIncome;
+    const businessExpenses = expenseData.deductibleExpenses;
+    const netIncome = grossIncome - businessExpenses;
+    
+    // Check if user is eligible for presumptive taxation
+    const presumptiveTax = user.taxInfo.presumptiveTaxation && grossIncome <= 5000000;
+    
+    let taxableIncome;
+    let incomeTaxCalc;
+    
+    if (presumptiveTax) {
+      // Use presumptive taxation (Section 44ADA)
+      const presumptiveResult = this.calculateIndianPresumptiveTax(grossIncome);
+      taxableIncome = presumptiveResult.presumptiveProfit;
+      incomeTaxCalc = presumptiveResult.taxCalculation;
+    } else {
+      // Regular taxation
+      taxableIncome = Math.max(0, netIncome);
+      const deductions = {
+        section80C: Math.min(user.taxInfo.section80C || 0, 150000),
+        section80D: Math.min(user.taxInfo.section80D || 0, 25000),
+        section80E: user.taxInfo.section80E || 0
+      };
+      incomeTaxCalc = this.calculateIndianIncomeTax(taxableIncome, user.taxInfo.taxRegime, deductions);
+    }
+
+    // Calculate GST
+    const gstCalc = this.calculateIndianGST(grossIncome, 'digitalServices');
+
+    // Calculate professional tax (state-specific)
+    const professionalTax = Math.min(2500, grossIncome * 0.001); // Simplified calculation
+
+    const totalTaxOwed = incomeTaxCalc.totalTax + gstCalc.gstAmount + professionalTax;
+
+    // Calculate quarterly payment for advance tax
+    const estimatedQuarterlyPayment = totalTaxOwed / 4;
+
+    // Tax jar recommendation (30% of income for Indian creators)
+    const taxJarAmount = grossIncome * 0.30;
+
+    // Generate India-specific recommendations
+    const recommendations = {
+      taxJarAmount,
+      nextQuarterlyDue: this.getNextQuarterlyDueDate(),
+      suggestedDeductions: [
+        'Maximize Section 80C deductions (₹1.5 lakh)',
+        'Claim home office and equipment expenses',
+        'Keep GST input credit receipts'
+      ],
+      taxStrategy: presumptiveTax ? 'Presumptive Taxation (Section 44ADA)' : 'Regular Business Taxation',
+      gstAdvice: gstCalc.message
+    };
+
+    // Save calculation
+    const taxCalculation = new TaxCalculation({
+      user: userId,
+      period: { year, quarter },
+      income: incomeData,
+      expenses: expenseData,
+      taxCalculations: {
+        adjustedGrossIncome: taxableIncome,
+        selfEmploymentIncome: taxableIncome,
+        federalTaxOwed: incomeTaxCalc.incomeTax, // Using this field for income tax
+        stateTaxOwed: professionalTax,
+        selfEmploymentTax: gstCalc.gstAmount, // Using this field for GST
+        totalTaxOwed,
+        estimatedQuarterlyPayment,
+        // India-specific fields
+        gstAmount: gstCalc.gstAmount,
+        cessAmount: incomeTaxCalc.cess,
+        taxRegime: user.taxInfo.taxRegime,
+        presumptiveTaxation: presumptiveTax
+      },
+      recommendations
+    });
+
+    await taxCalculation.save();
+    return taxCalculation;
+  }
+        user.taxInfo.stateTaxRate
+      );
+
+      // Total tax owed
+      const totalTaxOwed = federalTaxOwed + stateTaxOwed + selfEmploymentTax;
+
+      // Calculate quarterly payment if this is a quarterly calculation
+      let estimatedQuarterlyPayment = 0;
+      if (quarter) {
+        // Estimate annual tax liability based on current quarter
+        const annualizedIncome = adjustedGrossIncome * (4 / quarter);
+        const annualTaxLiability = this.calculateAnnualTaxLiability(annualizedIncome, user);
+        estimatedQuarterlyPayment = annualTaxLiability / 4;
+      } else {
+        estimatedQuarterlyPayment = totalTaxOwed / 4;
+      }
+
+      // Calculate tax jar recommendation
+      const taxJarAmount = this.calculateTaxJarRecommendation(
+        incomeData.totalIncome,
+        totalTaxOwed,
+        quarter
+      );
+
+      // Generate recommendations
+      const recommendations = await this.generateRecommendations(
+        userId,
+        incomeData,
+        expenseData,
+        totalTaxOwed,
+        year,
+        quarter
+      );
+
+      // Save calculation
+      const taxCalculation = new TaxCalculation({
+        user: userId,
+        period: { year, quarter },
+        income: incomeData,
+        expenses: expenseData,
+        taxCalculations: {
+          adjustedGrossIncome,
+          selfEmploymentIncome,
+          federalTaxOwed,
+          stateTaxOwed,
+          selfEmploymentTax,
+          totalTaxOwed,
+          estimatedQuarterlyPayment
+        },
+        recommendations: {
+          taxJarAmount,
+          nextQuarterlyDue: this.getNextQuarterlyDueDate(),
+          suggestedDeductions: recommendations.suggestedDeductions,
+          taxStrategy: recommendations.taxStrategy
+        }
+      });
+
+      await taxCalculation.save();
+
+      return taxCalculation;
+    } catch (error) {
+      console.error('Tax calculation error:', error);
+      throw error;
+    }
+  }
+
+  async calculateIncome(userId, startDate, endDate) {
+    const incomeTransactions = await Transaction.find({
+      user: userId,
+      type: 'income',
+      date: { $gte: startDate, $lte: endDate }
+    });
+
+    const income = {
+      totalIncome: 0,
+      businessIncome: 0,
+      personalIncome: 0,
+      breakdown: {
+        adRevenue: 0,
+        sponsorships: 0,
+        subscriptions: 0,
+        donations: 0,
+        merchandise: 0,
+        affiliate: 0,
+        other: 0
+      }
+    };
+
+    incomeTransactions.forEach(transaction => {
+      income.totalIncome += transaction.amount;
+      
+      if (transaction.businessClassification === 'business') {
+        income.businessIncome += transaction.amount;
+        
+        // Categorize business income
+        const category = transaction.category.primary;
+        if (income.breakdown.hasOwnProperty(category)) {
+          income.breakdown[category] += transaction.amount;
+        } else {
+          income.breakdown.other += transaction.amount;
+        }
+      } else {
+        income.personalIncome += transaction.amount;
+      }
+    });
+
+    return income;
+  }
+
+  async calculateExpenses(userId, startDate, endDate) {
+    const expenseTransactions = await Transaction.find({
+      user: userId,
+      type: 'expense',
+      date: { $gte: startDate, $lte: endDate }
+    });
+
+    const expenses = {
+      totalExpenses: 0,
+      deductibleExpenses: 0,
+      breakdown: {
+        equipment: 0,
+        software: 0,
+        office: 0,
+        marketing: 0,
+        travel: 0,
+        meals: 0,
+        other: 0
+      }
+    };
+
+    expenseTransactions.forEach(transaction => {
+      expenses.totalExpenses += transaction.amount;
+      
+      if (transaction.taxDeductible.isDeductible) {
+        const deductionPercentage = transaction.taxDeductible.deductionPercentage || 1.0;
+        const deductibleAmount = transaction.amount * deductionPercentage;
+        expenses.deductibleExpenses += deductibleAmount;
+        
+        // Categorize deductible expenses
+        const deductionType = transaction.taxDeductible.deductionType || 'other';
+        if (expenses.breakdown.hasOwnProperty(deductionType)) {
+          expenses.breakdown[deductionType] += deductibleAmount;
+        } else {
+          expenses.breakdown.other += deductibleAmount;
+        }
+      }
+    });
+
+    return expenses;
+  }
+
+  calculateSelfEmploymentTax(selfEmploymentIncome) {
+    if (selfEmploymentIncome <= 400) {
+      return 0; // No self-employment tax if net earnings are $400 or less
+    }
+
+    // Calculate self-employment tax on 92.35% of net earnings
+    const taxableIncome = selfEmploymentIncome * 0.9235;
+    let selfEmploymentTax = taxableIncome * this.selfEmploymentTaxRate;
+
+    // Add additional Medicare tax if applicable
+    if (selfEmploymentIncome > this.additionalMedicareTaxThreshold) {
+      const additionalMedicareBase = selfEmploymentIncome - this.additionalMedicareTaxThreshold;
+      selfEmploymentTax += additionalMedicareBase * this.additionalMedicareTaxRate;
+    }
+
+    return selfEmploymentTax;
+  }
+
+  calculateFederalIncomeTax(adjustedGrossIncome, filingStatus) {
+    const standardDeduction = this.standardDeductions[filingStatus] || this.standardDeductions.single;
+    const taxableIncome = Math.max(0, adjustedGrossIncome - standardDeduction);
+
+    // Choose appropriate tax brackets based on filing status
+    const brackets = filingStatus === 'married_joint' 
+      ? this.federalTaxBracketsMarried 
+      : this.federalTaxBrackets;
+
+    let federalTax = 0;
+    let remainingIncome = taxableIncome;
+
+    for (const bracket of brackets) {
+      if (remainingIncome <= 0) break;
+
+      const taxableAtThisBracket = Math.min(remainingIncome, bracket.max - bracket.min);
+      federalTax += taxableAtThisBracket * bracket.rate;
+      remainingIncome -= taxableAtThisBracket;
+    }
+
+    return federalTax;
+  }
+
+  getStateTaxRate(state) {
+    return this.stateTaxRates[state?.toUpperCase()] || 0.05; // Default 5% if state not found
+  }
+
+  calculateStateTax(adjustedGrossIncome, state, customRate = null) {
+    if (customRate !== null) {
+      return adjustedGrossIncome * customRate;
+    }
+    
+    const stateRate = this.getStateTaxRate(state);
+    return adjustedGrossIncome * stateRate;
+  }
+
+  calculateAnnualTaxLiability(annualIncome, user) {
+    const selfEmploymentTax = this.calculateSelfEmploymentTax(annualIncome);
+    const federalTax = this.calculateFederalIncomeTax(annualIncome, user.taxInfo.filingStatus);
+    const stateTax = annualIncome * (user.taxInfo.stateTaxRate || 0.05);
+    
+    return federalTax + stateTax + selfEmploymentTax;
+  }
+
+  calculateTaxJarRecommendation(totalIncome, totalTaxOwed, quarter) {
+    // Recommend setting aside a percentage of each payment
+    const taxRate = totalIncome > 0 ? totalTaxOwed / totalIncome : 0.25;
+    
+    // Add a buffer for safety
+    const recommendedRate = Math.min(taxRate * 1.1, 0.4); // Cap at 40%
+    
+    return {
+      percentage: recommendedRate,
+      amount: totalIncome * recommendedRate,
+      message: `Set aside ${(recommendedRate * 100).toFixed(1)}% of each payment for taxes`
+    };
+  }
+
+  getNextQuarterlyDueDate() {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    
+    for (let quarter = 1; quarter <= 4; quarter++) {
+      const dueDate = this.quarterlyDueDates[quarter];
+      if (dueDate > now) {
+        return dueDate;
+      }
+    }
+    
+    // If all dates have passed, return Q1 of next year
+    return new Date(currentYear + 1, 3, 15);
+  }
+
+  async generateRecommendations(userId, incomeData, expenseData, totalTaxOwed, year, quarter) {
+    const suggestions = [];
+    
+    // Suggest potential deductions based on spending patterns
+    if (expenseData.breakdown.equipment < incomeData.businessIncome * 0.1) {
+      suggestions.push({
+        category: 'equipment',
+        description: 'Consider investing in business equipment for tax deductions',
+        potentialSavings: incomeData.businessIncome * 0.05 * 0.22 // 5% equipment spend at 22% tax rate
+      });
+    }
+
+    if (expenseData.breakdown.software < 2000) {
+      suggestions.push({
+        category: 'software',
+        description: 'Software subscriptions are fully deductible business expenses',
+        potentialSavings: 500 * 0.22
+      });
+    }
+
+    // Tax strategy recommendations
+    let taxStrategy = '';
+    if (incomeData.businessIncome > 50000) {
+      taxStrategy = 'Consider quarterly estimated tax payments to avoid penalties. ';
+    }
+    if (expenseData.deductibleExpenses < incomeData.businessIncome * 0.2) {
+      taxStrategy += 'Track more business expenses to maximize deductions. ';
+    }
+    if (quarter && quarter <= 2) {
+      taxStrategy += 'Consider making equipment purchases before year-end for immediate deductions.';
+    }
+
+    return {
+      suggestedDeductions: suggestions,
+      taxStrategy: taxStrategy.trim()
+    };
+  }
+
+  async calculateRealTimeTaxJar(userId, newTransactionAmount, transactionType) {
+    // Get current year's tax calculation
+    const currentYear = new Date().getFullYear();
+    const currentTaxCalc = await TaxCalculation.findOne({
+      user: userId,
+      'period.year': currentYear,
+      'period.quarter': { $exists: false }
+    }).sort({ calculatedAt: -1 });
+
+    if (!currentTaxCalc) {
+      // If no calculation exists, use default rate
+      const defaultTaxRate = 0.25; // 25% default
+      return {
+        amountToSetAside: Math.abs(newTransactionAmount) * defaultTaxRate,
+        taxRate: defaultTaxRate,
+        message: `Set aside $${(Math.abs(newTransactionAmount) * defaultTaxRate).toFixed(2)} for taxes`
+      };
+    }
+
+    // Calculate tax rate from existing calculation
+    const taxRate = currentTaxCalc.income.businessIncome > 0 
+      ? currentTaxCalc.taxCalculations.totalTaxOwed / currentTaxCalc.income.businessIncome
+      : 0.25;
+
+    const amountToSetAside = transactionType === 'income' 
+      ? Math.abs(newTransactionAmount) * taxRate 
+      : 0;
+
+    return {
+      amountToSetAside,
+      taxRate,
+      totalTaxJar: currentTaxCalc.recommendations.taxJarAmount + amountToSetAside,
+      message: `Set aside $${amountToSetAside.toFixed(2)} from this $${Math.abs(newTransactionAmount).toFixed(2)} payment for taxes`
+    };
+  }
+
+  // Calculate Indian income tax
+  calculateIndianIncomeTax(income, regime = 'new', deductions = {}) {
+    const brackets = regime === 'new' ? this.indianTaxBrackets : this.indianTaxBracketsOld;
+    let tax = 0;
+    let effectiveIncome = income;
+
+    // Apply deductions for old regime
+    if (regime === 'old') {
+      const totalDeductions = Math.min(
+        (deductions.section80C || 0) + 
+        (deductions.section80D || 0) + 
+        (deductions.section80E || 0) + 
+        (deductions.other || 0),
+        income
+      );
+      effectiveIncome = Math.max(0, income - totalDeductions);
+    } else {
+      // New regime has standard deduction
+      effectiveIncome = Math.max(0, income - this.indianStandardDeduction);
+    }
+
+    // Calculate tax based on brackets
+    for (const bracket of brackets) {
+      if (effectiveIncome > bracket.min) {
+        const taxableInThisBracket = Math.min(effectiveIncome - bracket.min, bracket.max - bracket.min);
+        tax += taxableInThisBracket * bracket.rate;
+      }
+    }
+
+    // Add health and education cess (4% on income tax)
+    const cess = tax * 0.04;
+
+    return {
+      incomeTax: tax,
+      cess: cess,
+      totalTax: tax + cess,
+      effectiveRate: effectiveIncome > 0 ? (tax + cess) / effectiveIncome : 0,
+      regime: regime
+    };
+  }
+
+  // Calculate GST for Indian creators
+  calculateIndianGST(income, serviceType = 'digitalServices') {
+    const gstThreshold = 2000000; // ₹20 lakh threshold for GST registration
+    
+    if (income <= gstThreshold) {
+      return {
+        gstRequired: false,
+        gstAmount: 0,
+        rate: 0,
+        message: 'GST registration not required (under ₹20 lakh threshold)'
+      };
+    }
+
+    const gstRate = this.indianGSTRates[serviceType] || this.indianGSTRates.digitalServices;
+    const gstAmount = income * gstRate;
+
+    return {
+      gstRequired: true,
+      gstAmount: gstAmount,
+      rate: gstRate,
+      serviceType: serviceType,
+      message: `GST applicable at ${(gstRate * 100)}% on income above ₹20 lakh`
+    };
+  }
+
+  // Calculate presumptive taxation for Indian digital creators
+  calculateIndianPresumptiveTax(grossIncome, serviceType = 'digitalServices') {
+    const rules = this.indianCreatorTaxRules.presumptiveBusinessIncome;
+    
+    if (grossIncome > rules.threshold) {
+      return {
+        applicable: false,
+        message: 'Income exceeds ₹50 lakh threshold for presumptive taxation'
+      };
+    }
+
+    const presumptiveProfit = grossIncome * rules.digitalServices;
+    const taxCalculation = this.calculateIndianIncomeTax(presumptiveProfit, 'new');
+
+    return {
+      applicable: true,
+      grossIncome: grossIncome,
+      presumptiveProfit: presumptiveProfit,
+      profitRate: rules.digitalServices,
+      taxCalculation: taxCalculation,
+      message: `Under Section 44ADA: ${(rules.digitalServices * 100)}% of income treated as profit`
+    };
+  }
+  calculateHomeOfficeDeduction(homeOfficeSquareFeet, totalHomeSquareFeet) {
+    const rules = this.creatorTaxRules.homeOfficeDeduction;
+    const percentage = Math.min(homeOfficeSquareFeet / totalHomeSquareFeet, 1);
+    const simplifiedDeduction = Math.min(homeOfficeSquareFeet * rules.perSquareFootDeduction, rules.maxDeduction);
+    
+    return {
+      simplifiedMethod: simplifiedDeduction,
+      percentage: percentage,
+      recommendation: simplifiedDeduction > 0 
+        ? `You could deduct $${simplifiedDeduction} using the simplified home office method.`
+        : 'Consider setting up a dedicated home office space for tax deductions.'
+    };
+  }
+
+  // Indian creator-specific tax advice
+  getIndianCreatorTaxTips(incomeLevel, country = 'IN') {
+    const tips = [];
+    
+    if (incomeLevel > 300000) {
+      tips.push("Consider choosing between new tax regime (no deductions) vs old regime (with deductions)");
+    }
+    
+    if (incomeLevel > 2000000) {
+      tips.push("GST registration required - you need to charge 18% GST on your services");
+      tips.push("File GST returns monthly and pay GST by 20th of next month");
+    }
+    
+    if (incomeLevel < 5000000) {
+      tips.push("You can opt for presumptive taxation (Section 44ADA) - 50% of income treated as profit");
+    }
+    
+    tips.push("Keep invoices for all business expenses - equipment, internet, phone bills");
+    tips.push("Claim home office expenses and equipment depreciation");
+    tips.push("Consider professional tax (₹2,500/year) and other state-specific taxes");
+    
+    if (incomeLevel > 1000000) {
+      tips.push("You may need to pay advance tax quarterly to avoid interest");
+      tips.push("Consider maximizing Section 80C deductions (₹1.5 lakh) if using old tax regime");
+    }
+
+    return tips;
+  }
+
+  // Currency conversion helper (basic - you might want to integrate real exchange rates)
+  convertCurrency(amount, fromCurrency, toCurrency) {
+    const exchangeRates = {
+      'USD_INR': 83.0,  // Approximate rate
+      'INR_USD': 1/83.0
+    };
+    
+    const rateKey = `${fromCurrency}_${toCurrency}`;
+    const rate = exchangeRates[rateKey] || 1;
+    
+    return amount * rate;
+  }
+
+  // Get tax advice based on country
+  getCreatorTaxTips(incomeLevel, expenseLevel, country = 'US') {
+    if (country === 'IN') {
+      return this.getIndianCreatorTaxTips(incomeLevel);
+    }
+    
+    // US tax tips (existing code)
+    const tips = [];
+    
+    if (incomeLevel > 50000) {
+      tips.push("Consider making quarterly estimated tax payments to avoid penalties");
+      tips.push("Track all business expenses - they add up quickly for creators");
+    }
+    
+    if (expenseLevel < incomeLevel * 0.15) {
+      tips.push("You might be missing deductible expenses. Common ones: equipment, software, internet, phone");
+    }
+    
+    tips.push("Keep receipts for all business purchases - apps like Expensify can help");
+    tips.push("Consider a dedicated business bank account for cleaner bookkeeping");
+    
+    if (incomeLevel > 100000) {
+      tips.push("You might benefit from forming an LLC or S-Corp - consult a tax professional");
+    }
+
+    return tips;
+  }
+}
+
+module.exports = new TaxCalculationService();
