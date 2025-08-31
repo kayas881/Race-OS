@@ -15,6 +15,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import LoadingSpinner from './components/LoadingSpinner';
 import TaxNotificationSystem from './components/TaxNotificationSystem';
+import { YouTubeCallback, TwitchCallback, PatreonCallback } from './components/OAuthCallback';
 
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -62,6 +63,9 @@ function App() {
                     <Route path="/invoices" element={<Invoices />} />
                     <Route path="/clients" element={<Clients />} />
                     <Route path="/integrations" element={<Integrations />} />
+                    <Route path="/integrations/youtube/callback" element={<YouTubeCallback />} />
+                    <Route path="/integrations/twitch/callback" element={<TwitchCallback />} />
+                    <Route path="/integrations/patreon/callback" element={<PatreonCallback />} />
                     <Route path="/branding" element={<BrandingSettings />} />
                     <Route path="/reports" element={<Reports />} />
                     <Route path="/tax" element={<Tax />} />

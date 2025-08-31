@@ -4,6 +4,12 @@ const PlatformIntegration = require('../models/PlatformIntegration');
 
 class PlatformIntegrationService {
   constructor() {
+    // Log environment variables for debugging
+    console.log('🔧 Initializing Platform Integration Service...');
+    console.log('📍 Google Client ID:', process.env.GOOGLE_CLIENT_ID ? `${process.env.GOOGLE_CLIENT_ID.substring(0, 20)}...` : 'NOT SET');
+    console.log('📍 Google Client Secret:', process.env.GOOGLE_CLIENT_SECRET ? 'SET' : 'NOT SET');
+    console.log('📍 Google Redirect URI:', process.env.GOOGLE_REDIRECT_URI || 'NOT SET');
+    
     // YouTube OAuth2 client
     this.youtubeAuth = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -28,19 +34,33 @@ class PlatformIntegrationService {
 
   // YouTube Integration Methods
   async getYouTubeAuthUrl(userId) {
-    const scopes = [
-      'https://www.googleapis.com/auth/youtube.readonly',
-      'https://www.googleapis.com/auth/yt-analytics.readonly'
-    ];
+    try {
+      // Check if credentials are properly configured
+      if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+        console.log('⚠️  Google OAuth credentials not configured, returning demo URL');
+        return `https://accounts.google.com/oauth/authorize?client_id=demo&redirect_uri=http://localhost:3002&scope=youtube.readonly&response_type=code&state=${userId}`;
+      }
 
-    const authUrl = this.youtubeAuth.generateAuthUrl({
-      access_type: 'offline',
-      scope: scopes,
-      state: userId, // Pass user ID to identify the user in callback
-      prompt: 'consent'
-    });
+      const scopes = [
+        'https://www.googleapis.com/auth/youtube.readonly',
+        'https://www.googleapis.com/auth/yt-analytics.readonly'
+      ];
 
-    return authUrl;
+      console.log('🔗 Generating YouTube OAuth URL with real credentials...');
+      const authUrl = this.youtubeAuth.generateAuthUrl({
+        access_type: 'offline',
+        scope: scopes,
+        state: userId, // Pass user ID to identify the user in callback
+        prompt: 'consent'
+      });
+
+      console.log('✅ Generated OAuth URL:', authUrl.substring(0, 100) + '...');
+      return authUrl;
+    } catch (error) {
+      console.error('❌ Error generating YouTube OAuth URL:', error);
+      // Return demo URL as fallback
+      return `https://accounts.google.com/oauth/authorize?client_id=demo&redirect_uri=http://localhost:3002&scope=youtube.readonly&response_type=code&state=${userId}`;
+    }
   }
 
   async handleYouTubeCallback(code, userId) {

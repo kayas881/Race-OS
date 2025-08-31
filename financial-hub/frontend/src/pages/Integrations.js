@@ -30,10 +30,10 @@ const Integrations = () => {
         fetch('/api/integrations', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         }),
-        fetch('/api/test-integrations/test/banks', {
+        fetch('/api/integrations/banks', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         }),
-        fetch('/api/test-integrations/test/platforms', {
+        fetch('/api/integrations/platforms', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         })
       ]);
@@ -59,19 +59,30 @@ const Integrations = () => {
 
   const connectPlaid = async () => {
     try {
-      const response = await fetch('/api/test-integrations/test/plaid/link-token', {
+      const response = await fetch('/api/integrations/plaid/link-token', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       
       const { linkToken } = await response.json();
       
-      // Simulate Plaid Link flow for demo
-      alert(`Demo: Plaid Link would open here with token: ${linkToken}`);
+      if (linkToken && linkToken !== 'demo-link-token') {
+        // Real Plaid Link integration
+        alert(`Real Plaid Link would open here with token: ${linkToken}`);
+        // In production, you'd use Plaid Link SDK here
+        // window.Plaid.create({
+        //   token: linkToken,
+        //   onSuccess: (publicToken, metadata) => {
+        //     // Exchange public token
+        //   }
+        // }).open();
+      } else {
+        alert(`Demo: Plaid Link would open here with token: ${linkToken}`);
+      }
       
-      // Simulate successful connection
+      // Simulate successful connection for demo
       setTimeout(async () => {
-        const exchangeResponse = await fetch('/api/test-integrations/test/plaid/exchange-token', {
+        const exchangeResponse = await fetch('/api/integrations/plaid/exchange-token', {
           method: 'POST',
           headers: { 
             'Authorization': `Bearer ${localStorage.getItem('token')}`,
@@ -95,31 +106,45 @@ const Integrations = () => {
 
   const connectPlatform = async (platform) => {
     try {
-      const response = await fetch(`/api/test-integrations/test/platforms/${platform}/connect`, {
+      const response = await fetch(`/api/integrations/platforms/${platform}/connect`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       
       const { authUrl } = await response.json();
       
-      // Simulate OAuth flow for demo
-      alert(`Demo: ${platform.charAt(0).toUpperCase() + platform.slice(1)} OAuth would open: ${authUrl}`);
-      
-      // Simulate successful callback
-      setTimeout(async () => {
-        const callbackResponse = await fetch(`/api/test-integrations/test/platforms/${platform}/callback`, {
-          method: 'POST',
-          headers: { 
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ code: 'demo-auth-code' })
-        });
+      if (authUrl && !authUrl.includes('demo')) {
+        // Real OAuth flow - open in new window
+        const popup = window.open(authUrl, 'oauth', 'width=500,height=600');
         
-        const result = await callbackResponse.json();
-        alert(`Success: ${result.message}`);
-        fetchData(); // Refresh data
-      }, 1500);
+        // Listen for OAuth completion
+        const checkClosed = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkClosed);
+            // Refresh data after OAuth completion
+            setTimeout(() => fetchData(), 2000);
+          }
+        }, 1000);
+      } else {
+        // Demo mode
+        alert(`Demo: ${platform.charAt(0).toUpperCase() + platform.slice(1)} OAuth would open: ${authUrl}`);
+        
+        // Simulate successful callback for demo
+        setTimeout(async () => {
+          const callbackResponse = await fetch(`/api/integrations/platforms/${platform}/callback`, {
+            method: 'POST',
+            headers: { 
+              'Authorization': `Bearer ${localStorage.getItem('token')}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ code: 'demo-auth-code' })
+          });
+          
+          const result = await callbackResponse.json();
+          alert(`Success: ${result.message}`);
+          fetchData(); // Refresh data
+        }, 1500);
+      }
       
     } catch (error) {
       console.error(`Error connecting to ${platform}:`, error);
@@ -129,7 +154,7 @@ const Integrations = () => {
   const syncIntegration = async (id, type) => {
     setSyncingId(id);
     try {
-      const response = await fetch(`/api/test-integrations/test/${type}/${id}/sync`, {
+      const response = await fetch(`/api/integrations/${type}/${id}/sync`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
@@ -149,7 +174,7 @@ const Integrations = () => {
     if (!window.confirm('Are you sure you want to disconnect this integration?')) return;
     
     try {
-      await fetch(`/api/test-integrations/test/${type}/${id}`, {
+      await fetch(`/api/integrations/${type}/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
@@ -171,7 +196,7 @@ const Integrations = () => {
       formData.append('bankName', 'Custom Bank');
       formData.append('accountType', 'checking');
       
-      const response = await fetch('/api/test-integrations/test/csv/upload', {
+      const response = await fetch('/api/integrations/csv/upload', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: formData

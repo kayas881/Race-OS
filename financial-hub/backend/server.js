@@ -55,6 +55,7 @@ app.use('/api/tax', require('./routes/tax'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/integrations', require('./routes/integrations'));
 app.use('/api/test-integrations', require('./routes/test-integrations'));
+app.use('/api/test', require('./routes/test'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/clients', require('./routes/clients'));
 app.use('/api/branding', require('./routes/branding'));

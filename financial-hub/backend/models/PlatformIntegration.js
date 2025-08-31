@@ -8,7 +8,7 @@ const platformIntegrationSchema = new mongoose.Schema({
   },
   platform: {
     type: String,
-    enum: ['youtube', 'twitch', 'patreon', 'other'],
+    enum: ['youtube', 'twitch', 'patreon', 'substack', 'other'],
     required: true
   },
   

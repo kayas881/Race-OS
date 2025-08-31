@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const PlaidService = require('../services/PlaidService');
 const PlatformIntegrationService = require('../services/PlatformIntegrationService');
 const CSVImportService = require('../services/CSVImportService');
+const SubstackService = require('../services/SubstackService');
 const BankIntegration = require('../models/BankIntegration');
 const PlatformIntegration = require('../models/PlatformIntegration');
 const multer = require('multer');
@@ -412,6 +413,108 @@ router.delete('/platforms/:id', auth, async (req, res) => {
   } catch (error) {
     console.error('Error disconnecting platform:', error);
     res.status(500).json({ error: 'Failed to disconnect platform' });
+  }
+});
+
+// Substack Integration Routes
+
+// Get Substack export instructions
+router.get('/platforms/substack/instructions', auth, (req, res) => {
+  try {
+    const instructions = SubstackService.getExportInstructions();
+    res.json(instructions);
+  } catch (error) {
+    console.error('Error getting Substack instructions:', error);
+    res.status(500).json({ error: 'Failed to get export instructions' });
+  }
+});
+
+// Connect Substack via CSV upload
+router.post('/platforms/substack/csv', auth, upload.single('csvFile'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'CSV file is required' });
+    }
+    
+    const { publicationName } = req.body;
+    
+    if (!publicationName) {
+      return res.status(400).json({ error: 'Publication name is required' });
+    }
+    
+    const integration = await SubstackService.connectViaCSV(
+      req.user.id,
+      req.file.path,
+      publicationName
+    );
+    
+    // Clean up uploaded file
+    const fs = require('fs');
+    fs.unlinkSync(req.file.path);
+    
+    res.json({
+      message: 'Substack connected successfully via CSV',
+      integration: {
+        id: integration._id,
+        platform: integration.platform,
+        publicationName: integration.channelName,
+        subscriberCount: integration.platformData.totalSubscribers,
+        paidSubscribers: integration.platformData.paidSubscribers,
+        status: integration.status
+      }
+    });
+  } catch (error) {
+    console.error('Error connecting Substack via CSV:', error);
+    res.status(500).json({ error: 'Failed to connect Substack account' });
+  }
+});
+
+// Add manual Substack revenue entry
+router.post('/platforms/substack/manual', auth, async (req, res) => {
+  try {
+    const { publicationName, revenueData } = req.body;
+    
+    if (!publicationName || !revenueData) {
+      return res.status(400).json({ error: 'Publication name and revenue data are required' });
+    }
+    
+    const result = await SubstackService.addManualRevenue(
+      req.user.id,
+      publicationName,
+      revenueData
+    );
+    
+    res.json({
+      message: 'Revenue data added successfully',
+      revenueData: result
+    });
+  } catch (error) {
+    console.error('Error adding manual Substack revenue:', error);
+    res.status(500).json({ error: 'Failed to add revenue data' });
+  }
+});
+
+// Get Substack revenue summary
+router.get('/platforms/substack/:publicationName/summary', auth, async (req, res) => {
+  try {
+    const { publicationName } = req.params;
+    const { startDate, endDate } = req.query;
+    
+    // Default to last 30 days if no date range provided
+    const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const end = endDate ? new Date(endDate) : new Date();
+    
+    const summary = await SubstackService.getRevenueSummary(
+      req.user.id,
+      publicationName,
+      start,
+      end
+    );
+    
+    res.json(summary);
+  } catch (error) {
+    console.error('Error getting Substack summary:', error);
+    res.status(500).json({ error: 'Failed to get revenue summary' });
   }
 });
 
