@@ -117,7 +117,7 @@ router.post('/sync/:accountId', auth, async (req, res) => {
             merchantName: plaidTxn.merchant_name,
             amount: plaidTxn.amount,
             categories: plaidTxn.category
-          });
+          }, req.user.id);
 
           const transaction = new Transaction({
             user: req.user.id,
@@ -204,7 +204,7 @@ router.post('/manual', auth, [
         merchantName,
         amount: parseFloat(amount),
         type
-      });
+      }, req.user.id);
       finalCategory = categorization.category;
       businessClassification = categorization.businessClassification;
       taxDeductible = categorization.taxDeductible;
@@ -232,7 +232,27 @@ router.post('/manual', auth, [
     const populatedTransaction = await Transaction.findById(transaction._id)
       .populate('account', 'accountName platform');
 
-    res.json(populatedTransaction);
+    // If this is income and business-related, include tax set-aside calculation
+    let taxNotification = null;
+    if (type === 'income' && businessClassification === 'business') {
+      const taxService = require('../services/taxService');
+      const userTaxSettings = await taxService.getUserTaxSettings(req.user.id);
+      const taxCalculation = taxService.calculateTaxSetAside(parseFloat(amount), userTaxSettings);
+      
+      taxNotification = {
+        type: 'tax_set_aside',
+        amount: parseFloat(amount),
+        setAside: taxCalculation.totalSetAside,
+        rate: taxCalculation.recommendedRate,
+        breakdown: taxCalculation.breakdown,
+        netIncome: taxCalculation.netIncome
+      };
+    }
+
+    res.json({
+      ...populatedTransaction.toObject(),
+      taxNotification
+    });
   } catch (error) {
     console.error('Error creating manual transaction:', error);
     res.status(500).json({ error: 'Server error' });
@@ -285,6 +305,156 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
+// @route   PUT /api/transactions/:id/categorize
+// @desc    Manually override transaction categorization
+// @access  Private
+router.put('/:id/categorize', auth, [
+  body('category.primary').notEmpty().withMessage('Primary category is required'),
+  body('businessClassification').isIn(['business', 'personal', 'mixed']).withMessage('Valid business classification required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const transaction = await Transaction.findOne({ 
+      _id: req.params.id, 
+      user: req.user.id 
+    });
+
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    // Store original categorization for training
+    const systemPrediction = {
+      category: {
+        primary: transaction.category.primary,
+        detailed: transaction.category.detailed,
+        confidence: transaction.category.confidence
+      },
+      businessClassification: transaction.businessClassification,
+      taxDeductible: {
+        isDeductible: transaction.taxDeductible.isDeductible,
+        confidence: transaction.taxDeductible.confidence
+      }
+    };
+
+    // Update transaction with user's manual categorization
+    const userCorrection = {
+      category: {
+        primary: req.body.category.primary,
+        detailed: req.body.category.detailed || req.body.category.primary,
+        confidence: 1.0 // User corrections have full confidence
+      },
+      businessClassification: req.body.businessClassification,
+      taxDeductible: {
+        isDeductible: req.body.taxDeductible?.isDeductible || false,
+        deductionType: req.body.taxDeductible?.deductionType,
+        confidence: 1.0,
+        notes: req.body.taxDeductible?.notes
+      }
+    };
+
+    // Update the transaction
+    transaction.category = userCorrection.category;
+    transaction.businessClassification = userCorrection.businessClassification;
+    transaction.taxDeductible = userCorrection.taxDeductible;
+    transaction.isReviewed = true;
+    transaction.reviewedAt = new Date();
+    transaction.reviewedBy = req.user.id;
+    transaction.notes = req.body.notes || transaction.notes;
+
+    await transaction.save();
+
+    // Record the correction for ML training
+    await categorizationService.recordUserCorrection(
+      req.user.id,
+      {
+        description: transaction.description,
+        merchantName: transaction.merchantName,
+        amount: transaction.amount,
+        type: transaction.type
+      },
+      userCorrection,
+      systemPrediction
+    );
+
+    const populatedTransaction = await Transaction.findById(transaction._id)
+      .populate('account', 'accountName platform');
+
+    res.json({
+      message: 'Transaction categorization updated successfully',
+      transaction: populatedTransaction,
+      mlTrainingRecorded: true
+    });
+
+  } catch (error) {
+    console.error('Error updating transaction categorization:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   POST /api/transactions/retrain-model
+// @desc    Retrain categorization model for user
+// @access  Private
+router.post('/retrain-model', auth, async (req, res) => {
+  try {
+    const success = await categorizationService.trainModel(req.user.id);
+    
+    if (success) {
+      res.json({ 
+        message: 'Categorization model retrained successfully',
+        trained: true 
+      });
+    } else {
+      res.json({ 
+        message: 'Insufficient training data. Need at least 10 manual corrections.',
+        trained: false 
+      });
+    }
+  } catch (error) {
+    console.error('Error retraining model:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   GET /api/transactions/:id/categorization-suggestions
+// @desc    Get categorization suggestions for a transaction
+// @access  Private
+router.get('/:id/categorization-suggestions', auth, async (req, res) => {
+  try {
+    const transaction = await Transaction.findOne({ 
+      _id: req.params.id, 
+      user: req.user.id 
+    });
+
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    const suggestions = await categorizationService.suggestCategories(
+      `${transaction.description} ${transaction.merchantName || ''}`,
+      5
+    );
+
+    res.json({
+      transaction: {
+        id: transaction._id,
+        description: transaction.description,
+        merchantName: transaction.merchantName,
+        currentCategory: transaction.category
+      },
+      suggestions
+    });
+
+  } catch (error) {
+    console.error('Error getting categorization suggestions:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // @route   DELETE /api/transactions/:id
 // @desc    Delete transaction
 // @access  Private
@@ -331,7 +501,7 @@ router.post('/:id/categorize', auth, async (req, res) => {
       merchantName: transaction.merchantName,
       amount: transaction.amount,
       type: transaction.type
-    });
+    }, req.user.id);
 
     transaction.category = categorization.category;
     transaction.businessClassification = categorization.businessClassification;

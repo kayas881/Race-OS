@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const auth = require('../middleware/auth');
 const taxCalculationService = require('../services/taxCalculation');
+const taxService = require('../services/taxService');
 const TaxCalculation = require('../models/TaxCalculation');
 
 const router = express.Router();
@@ -282,6 +283,137 @@ router.get('/quarterly-schedule', auth, async (req, res) => {
     res.json(schedule);
   } catch (error) {
     console.error('Error fetching quarterly schedule:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   GET /api/tax/quarterly-dates
+// @desc    Get upcoming quarterly tax due dates
+// @access  Private
+router.get('/quarterly-dates', auth, async (req, res) => {
+  try {
+    const upcomingDates = taxService.getUpcomingQuarterlyDates();
+    const quarterlyIncome = await taxService.getQuarterlyTaxSummary(req.user.id);
+    const reminders = taxService.generateTaxReminders(upcomingDates, quarterlyIncome);
+
+    res.json({
+      upcomingDates,
+      reminders,
+      currentQuarter: taxService.getCurrentQuarter()
+    });
+  } catch (error) {
+    console.error('Error fetching quarterly dates:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   POST /api/tax/calculate-set-aside
+// @desc    Calculate tax set-aside for new income
+// @access  Private
+router.post('/calculate-set-aside', auth, [
+  body('amount').isNumeric().withMessage('Amount must be a number'),
+  body('country').optional().isIn(['US', 'IN']).withMessage('Country must be US or IN')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { amount, country = 'US' } = req.body;
+    const userTaxSettings = await taxService.getUserTaxSettings(req.user.id);
+    
+    const calculation = taxService.calculateTaxSetAside(amount, userTaxSettings, country);
+
+    res.json({
+      ...calculation,
+      notification: {
+        type: 'info',
+        message: `Set aside ${(calculation.recommendedRate * 100).toFixed(1)}% ($${calculation.totalSetAside.toFixed(2)}) for taxes`,
+        breakdown: [
+          `Federal: $${calculation.breakdown.federal.toFixed(2)}`,
+          `State: $${calculation.breakdown.state.toFixed(2)}`,
+          `Self-Employment: $${calculation.breakdown.selfEmployment.toFixed(2)}`
+        ],
+        netIncome: `Your net income: $${calculation.netIncome.toFixed(2)}`
+      }
+    });
+  } catch (error) {
+    console.error('Error calculating tax set-aside:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   GET /api/tax/quarterly-summary
+// @desc    Get quarterly tax summary
+// @access  Private
+router.get('/quarterly-summary', auth, async (req, res) => {
+  try {
+    const { year = new Date().getFullYear() } = req.query;
+    const summary = await taxService.getQuarterlyTaxSummary(req.user.id, parseInt(year));
+
+    res.json({
+      year: parseInt(year),
+      quarters: summary,
+      upcomingDates: taxService.getUpcomingQuarterlyDates()
+    });
+  } catch (error) {
+    console.error('Error fetching quarterly summary:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   GET /api/tax/ytd-liability
+// @desc    Get year-to-date tax liability
+// @access  Private
+router.get('/ytd-liability', auth, async (req, res) => {
+  try {
+    const { year = new Date().getFullYear() } = req.query;
+    const liability = await taxService.calculateYTDTaxLiability(req.user.id, parseInt(year));
+
+    res.json(liability);
+  } catch (error) {
+    console.error('Error calculating YTD liability:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   PUT /api/tax/settings
+// @desc    Update user tax settings
+// @access  Private
+router.put('/settings', auth, [
+  body('federalIncome').optional().isFloat({ min: 0, max: 1 }).withMessage('Federal rate must be between 0 and 1'),
+  body('stateIncome').optional().isFloat({ min: 0, max: 1 }).withMessage('State rate must be between 0 and 1'),
+  body('selfEmployment').optional().isFloat({ min: 0, max: 1 }).withMessage('SE rate must be between 0 and 1'),
+  body('totalRecommended').optional().isFloat({ min: 0, max: 1 }).withMessage('Total rate must be between 0 and 1')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const settings = await taxService.saveUserTaxSettings(req.user.id, req.body);
+
+    res.json({
+      message: 'Tax settings updated successfully',
+      settings: settings.userTaxSettings
+    });
+  } catch (error) {
+    console.error('Error updating tax settings:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   GET /api/tax/settings
+// @desc    Get user tax settings
+// @access  Private
+router.get('/settings', auth, async (req, res) => {
+  try {
+    const settings = await taxService.getUserTaxSettings(req.user.id);
+    res.json(settings);
+  } catch (error) {
+    console.error('Error fetching tax settings:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

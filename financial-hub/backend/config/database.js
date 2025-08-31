@@ -19,14 +19,19 @@ class DatabaseConnection {
         console.log('🌐 Attempting to connect to MongoDB Atlas...');
         
         try {
-          // Try to connect to Atlas with a short timeout
+          // Try to connect to Atlas with longer timeout and better options
           await mongoose.connect(mongoUri, { 
-            serverSelectionTimeoutMS: 5000, // 5 second timeout
-            socketTimeoutMS: 45000,
+            serverSelectionTimeoutMS: 30000, // 30 second timeout
+            socketTimeoutMS: 75000, // 75 second socket timeout
+            family: 4, // Use IPv4, skip trying IPv6
+            maxPoolSize: 10,
+            retryWrites: true,
+            w: 'majority'
           });
           
           this.isConnected = true;
           console.log('✅ MongoDB Atlas connected successfully');
+          console.log(`📍 Connected to database: ${mongoose.connection.name}`);
           
           // Set up connection event handlers
           this.setupConnectionHandlers();
@@ -34,10 +39,24 @@ class DatabaseConnection {
           
         } catch (atlasError) {
           console.log('⚠️  MongoDB Atlas connection failed:', atlasError.message);
-          console.log('💡 To use Atlas, make sure to:');
-          console.log('   1. Whitelist your IP address in Atlas Security');
-          console.log('   2. Check your cluster is running');
-          console.log('   3. Verify your connection string');
+          if (atlasError.message.includes('IP')) {
+            console.log('💡 IP Address Issue: Add your current IP to Atlas Network Access');
+            console.log('   Go to: Atlas Dashboard → Network Access → Add IP Address');
+          }
+          if (atlasError.message.includes('authentication')) {
+            console.log('💡 Authentication Issue: Check username/password in connection string');
+          }
+          console.log('💡 Other troubleshooting steps:');
+          console.log('   1. Verify cluster is not paused/stopped');
+          console.log('   2. Check connection string format');
+          console.log('   3. Ensure database user has proper permissions');
+          
+          // Only fallback to memory server in development
+          if (process.env.NODE_ENV === 'production') {
+            console.error('❌ Production environment requires Atlas connection');
+            throw atlasError;
+          }
+          
           console.log('🔄 Falling back to MongoDB Memory Server for development...');
           
           // Disconnect any partial Atlas connection

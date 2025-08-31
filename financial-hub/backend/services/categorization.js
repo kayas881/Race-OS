@@ -1,10 +1,14 @@
 const natural = require('natural');
 const compromise = require('compromise');
+const CategorizationTraining = require('../models/CategorizationTraining');
 
 class CategorizationService {
   constructor() {
     this.tokenizer = new natural.WordTokenizer();
     this.stemmer = natural.PorterStemmer;
+    this.classifier = new natural.BayesClassifier();
+    this.isModelTrained = false;
+    this.userModels = new Map(); // Store user-specific models
     
     // Pre-defined categories for creators and freelancers
     this.categories = {
@@ -106,7 +110,7 @@ class CategorizationService {
     };
   }
 
-  async categorizeTransaction(transactionData) {
+  async categorizeTransaction(transactionData, userId = null) {
     const { description, merchantName, amount, type, categories: plaidCategories } = transactionData;
     
     // Normalize text for analysis
@@ -120,8 +124,43 @@ class CategorizationService {
       taxDeductible: { isDeductible: false, confidence: 0 }
     };
 
+    // Try user-specific ML model first if available
+    if (userId && this.userModels.has(userId)) {
+      const userModel = this.userModels.get(userId);
+      const mlPrediction = await this.predictWithUserModel(userModel, text, tokens, stems);
+      if (mlPrediction.confidence > 0.6) {
+        bestMatch = mlPrediction;
+      }
+    }
+
+    // Fall back to rule-based categorization if ML confidence is low
+    if (bestMatch.category.confidence < 0.6) {
+      bestMatch = await this.ruleBasedCategorization(tokens, stems, type, plaidCategories);
+    }
+
+    // Use Plaid categories as fallback if confidence is still low
+    if (bestMatch.category.confidence < 0.5 && plaidCategories && plaidCategories.length > 0) {
+      bestMatch.category.primary = plaidCategories[0].toLowerCase().replace(' ', '_');
+      bestMatch.category.detailed = plaidCategories.join(', ');
+      bestMatch.category.confidence = 0.3;
+    }
+
+    // Apply creator-specific business rules
+    bestMatch = this.applyCreatorBusinessRules(bestMatch, text, type);
+
+    return bestMatch;
+  }
+
+  async ruleBasedCategorization(tokens, stems, type, plaidCategories) {
+    // Original rule-based logic
+    let bestMatch = {
+      category: { primary: 'other', detailed: 'uncategorized', confidence: 0 },
+      businessClassification: 'unknown',
+      taxDeductible: { isDeductible: false, confidence: 0 }
+    };
+
     // Determine if transaction is income or expense based on type and amount
-    const transactionType = type || (amount > 0 ? 'expense' : 'income');
+    const transactionType = type || 'expense';
     
     // Search through appropriate categories
     const categoryGroups = transactionType === 'income' 
@@ -158,16 +197,6 @@ class CategorizationService {
         }
       }
     }
-
-    // Use Plaid categories as fallback if confidence is low
-    if (bestMatch.category.confidence < 0.5 && plaidCategories && plaidCategories.length > 0) {
-      bestMatch.category.primary = plaidCategories[0].toLowerCase().replace(' ', '_');
-      bestMatch.category.detailed = plaidCategories.join(', ');
-      bestMatch.category.confidence = 0.3;
-    }
-
-    // Apply creator-specific business rules
-    bestMatch = this.applyCreatorBusinessRules(bestMatch, text, transactionType);
 
     return bestMatch;
   }
@@ -250,10 +279,175 @@ class CategorizationService {
     return categorization;
   }
 
-  async trainModel(transactions) {
-    // TODO: Implement machine learning training with historical data
-    // This would use the transaction history to improve categorization accuracy
-    console.log('Training categorization model with', transactions.length, 'transactions');
+  async trainModel(userId) {
+    try {
+      console.log('Training categorization model for user:', userId);
+      
+      // Get user's training data
+      const trainingData = await CategorizationTraining.find({ user: userId })
+        .sort({ createdAt: -1 })
+        .limit(1000); // Use last 1000 corrections
+      
+      if (trainingData.length < 10) {
+        console.log('Insufficient training data for user:', userId);
+        return false;
+      }
+
+      // Create user-specific classifier
+      const userClassifier = new natural.BayesClassifier();
+      
+      // Train the classifier
+      for (const training of trainingData) {
+        const features = this.extractFeatures(training.transactionData);
+        const label = `${training.userClassification.category.primary}|${training.userClassification.businessClassification}|${training.userClassification.taxDeductible.isDeductible}`;
+        
+        userClassifier.addDocument(features, label);
+      }
+      
+      userClassifier.train();
+      
+      // Store the trained model
+      this.userModels.set(userId, {
+        classifier: userClassifier,
+        trainingCount: trainingData.length,
+        lastTrained: new Date()
+      });
+      
+      console.log(`Successfully trained model for user ${userId} with ${trainingData.length} examples`);
+      return true;
+      
+    } catch (error) {
+      console.error('Error training categorization model:', error);
+      return false;
+    }
+  }
+
+  async predictWithUserModel(userModel, text, tokens, stems) {
+    try {
+      const features = tokens.join(' ');
+      const prediction = userModel.classifier.classify(features);
+      const confidence = userModel.classifier.getClassifications(features)[0].value;
+      
+      // Parse the prediction
+      const [primary, businessClassification, taxDeductible] = prediction.split('|');
+      
+      return {
+        category: {
+          primary: primary,
+          detailed: primary,
+          confidence: confidence
+        },
+        businessClassification: businessClassification,
+        taxDeductible: {
+          isDeductible: taxDeductible === 'true',
+          confidence: confidence
+        }
+      };
+    } catch (error) {
+      console.error('Error predicting with user model:', error);
+      return {
+        category: { primary: 'other', detailed: 'uncategorized', confidence: 0 },
+        businessClassification: 'unknown',
+        taxDeductible: { isDeductible: false, confidence: 0 }
+      };
+    }
+  }
+
+  extractFeatures(transactionData) {
+    const text = this.normalizeText(`${transactionData.description} ${transactionData.merchantName || ''}`);
+    const tokens = this.tokenizer.tokenize(text.toLowerCase());
+    return tokens.join(' ');
+  }
+
+  async recordUserCorrection(userId, originalTransaction, userCorrection, systemPrediction) {
+    try {
+      // Determine correction type
+      let correctionType = 'new_classification';
+      if (systemPrediction.category.primary !== userCorrection.category.primary) {
+        correctionType = 'category_correction';
+      } else if (systemPrediction.businessClassification !== userCorrection.businessClassification) {
+        correctionType = 'business_classification_correction';
+      } else if (systemPrediction.taxDeductible.isDeductible !== userCorrection.taxDeductible.isDeductible) {
+        correctionType = 'tax_deductible_correction';
+      }
+
+      // Extract features
+      const text = this.normalizeText(`${originalTransaction.description} ${originalTransaction.merchantName || ''}`);
+      const tokens = this.tokenizer.tokenize(text.toLowerCase());
+      const stems = tokens.map(token => this.stemmer.stem(token));
+      
+      const training = new CategorizationTraining({
+        user: userId,
+        transactionData: {
+          description: originalTransaction.description,
+          merchantName: originalTransaction.merchantName,
+          amount: originalTransaction.amount,
+          type: originalTransaction.type
+        },
+        userClassification: userCorrection,
+        systemPrediction: systemPrediction,
+        correctionType: correctionType,
+        features: {
+          keywords: tokens,
+          stems: stems,
+          patterns: this.extractPatterns(text),
+          merchant_type: this.detectMerchantType(originalTransaction.merchantName),
+          amount_range: this.categorizeAmount(originalTransaction.amount)
+        }
+      });
+
+      await training.save();
+      
+      // Retrain model if we have enough corrections
+      const correctionCount = await CategorizationTraining.countDocuments({ user: userId });
+      if (correctionCount % 10 === 0) { // Retrain every 10 corrections
+        await this.trainModel(userId);
+      }
+      
+      console.log('Recorded user correction for user:', userId);
+      return true;
+      
+    } catch (error) {
+      console.error('Error recording user correction:', error);
+      return false;
+    }
+  }
+
+  extractPatterns(text) {
+    const patterns = [];
+    
+    // Common patterns
+    if (/\d+/.test(text)) patterns.push('contains_numbers');
+    if (/[A-Z]{2,}/.test(text)) patterns.push('contains_acronym');
+    if (/(inc|corp|llc|ltd)/i.test(text)) patterns.push('company_suffix');
+    if (/(store|shop|market)/i.test(text)) patterns.push('retail_pattern');
+    if (/(payment|bill|charge)/i.test(text)) patterns.push('payment_pattern');
+    
+    return patterns;
+  }
+
+  detectMerchantType(merchantName) {
+    if (!merchantName) return 'unknown';
+    
+    const merchant = merchantName.toLowerCase();
+    
+    if (/(amazon|ebay|etsy|shopify)/i.test(merchant)) return 'ecommerce';
+    if (/(walmart|target|costco|kroger)/i.test(merchant)) return 'retail';
+    if (/(mcdonalds|starbucks|restaurant|cafe)/i.test(merchant)) return 'food';
+    if (/(gas|shell|exxon|bp)/i.test(merchant)) return 'gas_station';
+    if (/(hotel|airbnb|booking)/i.test(merchant)) return 'travel';
+    if (/(uber|lyft|taxi)/i.test(merchant)) return 'transportation';
+    
+    return 'other';
+  }
+
+  categorizeAmount(amount) {
+    const absAmount = Math.abs(amount);
+    
+    if (absAmount < 50) return 'low';
+    if (absAmount < 500) return 'medium';
+    if (absAmount < 2000) return 'high';
+    return 'very_high';
   }
 
   async suggestCategories(description, limit = 5) {

@@ -6,11 +6,15 @@ import {
   CreditCard, 
   Receipt, 
   Calculator,
-  Settings,
   LogOut,
   Menu,
   X,
-  DollarSign
+  DollarSign,
+  FileText,
+  Link,
+  Users,
+  Palette,
+  BarChart3
 } from 'lucide-react';
 
 const Layout = ({ children }) => {
@@ -22,7 +26,12 @@ const Layout = ({ children }) => {
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Transactions', href: '/transactions', icon: Receipt },
     { name: 'Accounts', href: '/accounts', icon: CreditCard },
+    { name: 'Invoices', href: '/invoices', icon: FileText },
+    { name: 'Clients', href: '/clients', icon: Users },
+    { name: 'Reports', href: '/reports', icon: BarChart3 },
+    { name: 'Integrations', href: '/integrations', icon: Link },
     { name: 'Tax Center', href: '/tax', icon: Calculator },
+    { name: 'Branding', href: '/branding', icon: Palette },
   ];
 
   const handleLogout = () => {

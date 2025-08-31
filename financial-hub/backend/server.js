@@ -54,7 +54,16 @@ app.use('/api/categories', require('./routes/categories'));
 app.use('/api/tax', require('./routes/tax'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/integrations', require('./routes/integrations'));
+app.use('/api/test-integrations', require('./routes/test-integrations'));
+app.use('/api/invoices', require('./routes/invoices'));
+app.use('/api/clients', require('./routes/clients'));
+app.use('/api/branding', require('./routes/branding'));
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/reports', require('./routes/reports'));
 app.use('/api/demo', require('./routes/demo'));
+
+// Serve uploaded files
+app.use('/uploads', express.static('uploads'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -95,6 +104,12 @@ app.get('/api/status', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Financial Hub Backend running on port ${PORT}`);
+  
+  // Start notification scheduler
+  if (process.env.NODE_ENV !== 'test') {
+    const notificationScheduler = require('./services/notificationScheduler');
+    notificationScheduler.start();
+  }
 });
 
 module.exports = app;

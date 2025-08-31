@@ -229,4 +229,6 @@ dist/
 
 # Docker and local compose overrides
 docker-compose.override.yml
+*.md
+
 

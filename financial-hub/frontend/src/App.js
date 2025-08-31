@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
@@ -6,12 +6,26 @@ import Dashboard from './pages/Dashboard';
 import Transactions from './pages/Transactions';
 import Accounts from './pages/Accounts';
 import Tax from './pages/Tax';
+import Invoices from './pages/Invoices';
+import Clients from './pages/Clients';
+import Integrations from './pages/Integrations';
+import BrandingSettings from './pages/BrandingSettings';
+import Reports from './pages/Reports';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import LoadingSpinner from './components/LoadingSpinner';
+import TaxNotificationSystem from './components/TaxNotificationSystem';
 
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
+  const taxNotificationRef = useRef();
+
+  // Make tax notification system globally available
+  useEffect(() => {
+    if (isAuthenticated && taxNotificationRef.current) {
+      window.taxNotificationSystem = taxNotificationRef.current;
+    }
+  }, [isAuthenticated]);
 
   if (loading) {
     return (
@@ -39,16 +53,24 @@ function App() {
           path="/*" 
           element={
             isAuthenticated ? (
-              <Layout>
-                <Routes>
-                  <Route path="/dashboard" element={<Dashboard />} />
-                  <Route path="/transactions" element={<Transactions />} />
-                  <Route path="/accounts" element={<Accounts />} />
-                  <Route path="/tax" element={<Tax />} />
-                  <Route path="/" element={<Navigate to="/dashboard" />} />
-                  <Route path="*" element={<Navigate to="/dashboard" />} />
-                </Routes>
-              </Layout>
+              <>
+                <Layout>
+                  <Routes>
+                    <Route path="/dashboard" element={<Dashboard />} />
+                    <Route path="/transactions" element={<Transactions />} />
+                    <Route path="/accounts" element={<Accounts />} />
+                    <Route path="/invoices" element={<Invoices />} />
+                    <Route path="/clients" element={<Clients />} />
+                    <Route path="/integrations" element={<Integrations />} />
+                    <Route path="/branding" element={<BrandingSettings />} />
+                    <Route path="/reports" element={<Reports />} />
+                    <Route path="/tax" element={<Tax />} />
+                    <Route path="/" element={<Navigate to="/dashboard" />} />
+                    <Route path="*" element={<Navigate to="/dashboard" />} />
+                  </Routes>
+                </Layout>
+                <TaxNotificationSystem ref={taxNotificationRef} userId={user?.id} />
+              </>
             ) : (
               <Navigate to="/login" />
             )

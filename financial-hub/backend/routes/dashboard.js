@@ -378,4 +378,253 @@ router.get('/quick-stats', auth, async (req, res) => {
   }
 });
 
+// @route   GET /api/dashboard/export/csv
+// @desc    Export financial data to CSV
+// @access  Private
+router.get('/export/csv', auth, async (req, res) => {
+  try {
+    const { timeframe = 'month' } = req.query;
+    
+    // Calculate date range based on timeframe
+    let startDate, endDate;
+    const now = new Date();
+    
+    switch (timeframe) {
+      case 'quarter':
+        const quarterStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+        startDate = quarterStart;
+        endDate = new Date(quarterStart.getFullYear(), quarterStart.getMonth() + 3, 0);
+        break;
+      case 'year':
+        startDate = new Date(now.getFullYear(), 0, 1);
+        endDate = new Date(now.getFullYear(), 11, 31);
+        break;
+      default: // month
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    }
+
+    // Get transactions for the period
+    const transactions = await Transaction.find({
+      user: req.user.id,
+      date: { $gte: startDate, $lte: endDate }
+    })
+    .populate('category.primary', 'name')
+    .populate('account', 'name platform')
+    .sort({ date: -1 });
+
+    // Get invoices for the period
+    const Invoice = require('../models/Invoice');
+    const invoices = await Invoice.find({
+      user: req.user.id,
+      createdAt: { $gte: startDate, $lte: endDate }
+    }).sort({ createdAt: -1 });
+
+    // Prepare CSV data
+    let csvData = 'Type,Date,Description,Amount,Category,Account,Platform,Status\n';
+    
+    // Add transactions
+    transactions.forEach(transaction => {
+      csvData += `Transaction,${transaction.date.toISOString().split('T')[0]},${transaction.description},"${transaction.amount}","${transaction.category.primary?.name || 'Uncategorized'}","${transaction.account?.name || 'Unknown'}","${transaction.account?.platform || 'Unknown'}","${transaction.type}"\n`;
+    });
+
+    // Add invoices
+    invoices.forEach(invoice => {
+      csvData += `Invoice,${invoice.createdAt.toISOString().split('T')[0]},"${invoice.invoiceNumber} - ${invoice.client.name}","${invoice.total}","Invoice","","","${invoice.status}"\n`;
+    });
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="financial-report-${timeframe}-${now.toISOString().split('T')[0]}.csv"`);
+    res.send(csvData);
+
+  } catch (error) {
+    console.error('Error exporting CSV:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   GET /api/dashboard/export/pdf
+// @desc    Export financial data to PDF
+// @access  Private
+router.get('/export/pdf', auth, async (req, res) => {
+  try {
+    const { timeframe = 'month' } = req.query;
+    
+    // Calculate date range based on timeframe
+    let startDate, endDate, periodName;
+    const now = new Date();
+    
+    switch (timeframe) {
+      case 'quarter':
+        const quarterStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+        startDate = quarterStart;
+        endDate = new Date(quarterStart.getFullYear(), quarterStart.getMonth() + 3, 0);
+        periodName = `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`;
+        break;
+      case 'year':
+        startDate = new Date(now.getFullYear(), 0, 1);
+        endDate = new Date(now.getFullYear(), 11, 31);
+        periodName = now.getFullYear().toString();
+        break;
+      default: // month
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        periodName = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    }
+
+    // Get summary data
+    const transactionSummary = await Transaction.aggregate([
+      {
+        $match: {
+          user: new mongoose.Types.ObjectId(req.user.id),
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: '$type',
+          total: { $sum: '$amount' },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const Invoice = require('../models/Invoice');
+    const invoiceSummary = await Invoice.aggregate([
+      {
+        $match: {
+          user: new mongoose.Types.ObjectId(req.user.id),
+          createdAt: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          total: { $sum: '$total' },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Calculate totals
+    let totalIncome = 0, totalExpenses = 0;
+    transactionSummary.forEach(item => {
+      if (item._id === 'income') totalIncome = item.total;
+      if (item._id === 'expense') totalExpenses = item.total;
+    });
+
+    let totalInvoiced = 0, totalPaid = 0;
+    invoiceSummary.forEach(item => {
+      totalInvoiced += item.total;
+      if (item._id === 'paid') totalPaid = item.total;
+    });
+
+    // Generate HTML for PDF
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Financial Report - ${periodName}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; color: #333; }
+          .header { text-align: center; margin-bottom: 30px; }
+          .summary { display: flex; justify-content: space-around; margin: 30px 0; }
+          .metric { text-align: center; padding: 20px; background: #f8f9fa; border-radius: 8px; }
+          .metric h3 { margin: 0; color: #666; font-size: 14px; }
+          .metric p { margin: 10px 0 0 0; font-size: 24px; font-weight: bold; }
+          .income { color: #22c55e; }
+          .expense { color: #ef4444; }
+          .neutral { color: #3b82f6; }
+          .section { margin: 30px 0; }
+          .section h2 { border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }
+          table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+          th, td { padding: 10px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+          th { background: #f8f9fa; font-weight: bold; }
+          .footer { margin-top: 50px; text-align: center; color: #666; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>Financial Report</h1>
+          <p>Period: ${periodName}</p>
+          <p>Generated: ${now.toLocaleDateString()}</p>
+        </div>
+
+        <div class="summary">
+          <div class="metric">
+            <h3>Total Income</h3>
+            <p class="income">$${totalIncome.toLocaleString()}</p>
+          </div>
+          <div class="metric">
+            <h3>Total Expenses</h3>
+            <p class="expense">$${totalExpenses.toLocaleString()}</p>
+          </div>
+          <div class="metric">
+            <h3>Net Income</h3>
+            <p class="${(totalIncome - totalExpenses) >= 0 ? 'income' : 'expense'}">$${(totalIncome - totalExpenses).toLocaleString()}</p>
+          </div>
+          <div class="metric">
+            <h3>Total Invoiced</h3>
+            <p class="neutral">$${totalInvoiced.toLocaleString()}</p>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>Transaction Summary</h2>
+          <table>
+            <tr>
+              <th>Type</th>
+              <th>Count</th>
+              <th>Total Amount</th>
+            </tr>
+            ${transactionSummary.map(item => `
+              <tr>
+                <td>${item._id.charAt(0).toUpperCase() + item._id.slice(1)}</td>
+                <td>${item.count}</td>
+                <td>$${item.total.toLocaleString()}</td>
+              </tr>
+            `).join('')}
+          </table>
+        </div>
+
+        <div class="section">
+          <h2>Invoice Summary</h2>
+          <table>
+            <tr>
+              <th>Status</th>
+              <th>Count</th>
+              <th>Total Amount</th>
+            </tr>
+            ${invoiceSummary.map(item => `
+              <tr>
+                <td>${item._id.charAt(0).toUpperCase() + item._id.slice(1)}</td>
+                <td>${item.count}</td>
+                <td>$${item.total.toLocaleString()}</td>
+              </tr>
+            `).join('')}
+          </table>
+        </div>
+
+        <div class="footer">
+          <p>This report was generated automatically by your Financial Hub system.</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Generate PDF using the existing PDF generator
+    const pdfGenerator = require('../utils/pdfGenerator');
+    const pdfBuffer = await pdfGenerator.generateFromHTML(htmlContent);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="financial-report-${timeframe}-${now.toISOString().split('T')[0]}.pdf"`);
+    res.send(pdfBuffer);
+
+  } catch (error) {
+    console.error('Error exporting PDF:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
