@@ -1,7 +1,7 @@
 {
-  "name": "financial-hub-frontend",
+  "name": "race-os-frontend",
   "version": "1.0.0",
-  "description": "Financial Hub MVP Frontend for Creators and Freelancers",
+  "description": "Race-OS Frontend for Creators and Freelancers",
   "private": true,
   "dependencies": {
     "@heroicons/react": "^2.2.0",
@@ -54,6 +54,5 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  },
-  "proxy": "http://localhost:5000"
+  }
 }

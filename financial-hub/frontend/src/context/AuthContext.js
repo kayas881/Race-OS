@@ -1,6 +1,21 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 
+// Configure axios base URL for Codespaces
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+if (API_BASE_URL) {
+  axios.defaults.baseURL = API_BASE_URL;
+}
+
+// Configure axios for CORS in Codespaces
+axios.defaults.withCredentials = true;
+axios.defaults.headers.common['Content-Type'] = 'application/json';
+
+// Debug logging for development
+if (process.env.NODE_ENV === 'development') {
+  console.log('🔧 AuthContext API Base URL:', API_BASE_URL || 'Using relative URLs');
+}
+
 const AuthContext = createContext();
 
 export const useAuth = () => {

@@ -72,7 +72,7 @@ const Register = () => {
         <div className="flex justify-center">
           <div className="flex items-center">
             <DollarSign className="h-10 w-10 text-primary-600" />
-            <span className="ml-2 text-2xl font-bold text-gray-900">Financial Hub</span>
+            <span className="ml-2 text-2xl font-bold text-gray-900">Race-OS</span>
           </div>
         </div>
         <h2 className="mt-6 text-center text-3xl font-bold text-gray-900">

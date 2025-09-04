@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 Starting Financial Hub Backend..."
+echo "🚀 Starting Race-OS Backend..."
 
 cd /workspaces/Race-OS/financial-hub/backend
 

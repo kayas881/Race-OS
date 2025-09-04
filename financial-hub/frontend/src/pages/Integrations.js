@@ -10,6 +10,8 @@ import {
   TrashIcon,
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
+import { usePlaidLink } from 'react-plaid-link';
+import { apiFetch } from '../utils/api';
 
 const Integrations = () => {
   const [integrations, setIntegrations] = useState([]);
@@ -27,15 +29,9 @@ const Integrations = () => {
   const fetchData = async () => {
     try {
       const [integrationsRes, banksRes, platformsRes] = await Promise.all([
-        fetch('/api/integrations', {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        }),
-        fetch('/api/integrations/banks', {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        }),
-        fetch('/api/integrations/platforms', {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        })
+        apiFetch('api/integrations'),
+        apiFetch('api/integrations/banks'),
+        apiFetch('api/integrations/platforms')
       ]);
 
       const integrations = await integrationsRes.json();
@@ -106,9 +102,8 @@ const Integrations = () => {
 
   const connectPlatform = async (platform) => {
     try {
-      const response = await fetch(`/api/integrations/platforms/${platform}/connect`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      const response = await apiFetch(`api/integrations/platforms/${platform}/connect`, {
+        method: 'POST'
       });
       
       const { authUrl } = await response.json();
@@ -117,14 +112,31 @@ const Integrations = () => {
         // Real OAuth flow - open in new window
         const popup = window.open(authUrl, 'oauth', 'width=500,height=600');
         
-        // Listen for OAuth completion
-        const checkClosed = setInterval(() => {
-          if (popup.closed) {
-            clearInterval(checkClosed);
-            // Refresh data after OAuth completion
-            setTimeout(() => fetchData(), 2000);
+        // Listen for OAuth completion via postMessage
+        const handleMessage = (event) => {
+          if (event.origin !== window.location.origin) return;
+          
+          if (event.data.type === 'OAUTH_COMPLETE') {
+            popup.close();
+            window.removeEventListener('message', handleMessage);
+            
+            if (event.data.success) {
+              console.log('✅ OAuth completed successfully');
+              fetchData(); // Refresh data
+            } else {
+              console.error('❌ OAuth failed:', event.data.error);
+            }
           }
-        }, 1000);
+        };
+        
+        window.addEventListener('message', handleMessage);
+        
+        // Timeout fallback in case message doesn't arrive
+        setTimeout(() => {
+          window.removeEventListener('message', handleMessage);
+          console.log('⏰ OAuth timeout - please check if the integration completed');
+          fetchData(); // Refresh data anyway
+        }, 30000); // 30 second timeout
       } else {
         // Demo mode
         alert(`Demo: ${platform.charAt(0).toUpperCase() + platform.slice(1)} OAuth would open: ${authUrl}`);
@@ -154,10 +166,13 @@ const Integrations = () => {
   const syncIntegration = async (id, type) => {
     setSyncingId(id);
     try {
-      const response = await fetch(`/api/integrations/${type}/${id}/sync`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      const response = await apiFetch(`api/integrations/${type}/${id}/sync`, {
+        method: 'POST'
       });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       
       const result = await response.json();
       alert(`Sync completed: ${result.message}`);
@@ -165,6 +180,7 @@ const Integrations = () => {
       
     } catch (error) {
       console.error('Error syncing:', error);
+      alert(`Sync failed: ${error.message}`);
     } finally {
       setSyncingId(null);
     }
@@ -174,15 +190,20 @@ const Integrations = () => {
     if (!window.confirm('Are you sure you want to disconnect this integration?')) return;
     
     try {
-      await fetch(`/api/integrations/${type}/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      const response = await apiFetch(`api/integrations/${type}/${id}`, {
+        method: 'DELETE'
       });
       
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      alert('Integration disconnected successfully');
       fetchData(); // Refresh data
       
     } catch (error) {
       console.error('Error disconnecting:', error);
+      alert(`Disconnect failed: ${error.message}`);
     }
   };
 

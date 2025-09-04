@@ -59,7 +59,7 @@ const Layout = ({ children }) => {
         <div className="flex items-center justify-between h-16 px-6 border-b border-gray-200">
           <div className="flex items-center">
             <DollarSign className="h-8 w-8 text-primary-600" />
-            <span className="ml-2 text-xl font-bold text-gray-900">Financial Hub</span>
+            <span className="ml-2 text-xl font-bold text-gray-900">Race-OS</span>
           </div>
           <button
             className="lg:hidden"
@@ -142,7 +142,7 @@ const Layout = ({ children }) => {
             </button>
             <div className="flex items-center">
               <DollarSign className="h-6 w-6 text-primary-600" />
-              <span className="ml-2 font-semibold text-gray-900">Financial Hub</span>
+              <span className="ml-2 font-semibold text-gray-900">Race-OS</span>
             </div>
             <div></div>
           </div>

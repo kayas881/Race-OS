@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 Starting Financial Hub Demo..."
+echo "🚀 Starting Race-OS Demo..."
 
 # Start backend in background
 echo "📡 Starting backend server..."

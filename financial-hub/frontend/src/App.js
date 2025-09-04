@@ -13,9 +13,9 @@ import BrandingSettings from './pages/BrandingSettings';
 import Reports from './pages/Reports';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import OAuthCallback from './pages/OAuthCallback';
 import LoadingSpinner from './components/LoadingSpinner';
 import TaxNotificationSystem from './components/TaxNotificationSystem';
-import { YouTubeCallback, TwitchCallback, PatreonCallback } from './components/OAuthCallback';
 
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -49,6 +49,12 @@ function App() {
           element={!isAuthenticated ? <Register /> : <Navigate to="/dashboard" />} 
         />
         
+        {/* OAuth callback route (accessible to authenticated users) */}
+        <Route 
+          path="/integrations/:platform/callback" 
+          element={isAuthenticated ? <OAuthCallback /> : <Navigate to="/login" />} 
+        />
+        
         {/* Protected routes */}
         <Route 
           path="/*" 
@@ -63,9 +69,6 @@ function App() {
                     <Route path="/invoices" element={<Invoices />} />
                     <Route path="/clients" element={<Clients />} />
                     <Route path="/integrations" element={<Integrations />} />
-                    <Route path="/integrations/youtube/callback" element={<YouTubeCallback />} />
-                    <Route path="/integrations/twitch/callback" element={<TwitchCallback />} />
-                    <Route path="/integrations/patreon/callback" element={<PatreonCallback />} />
                     <Route path="/branding" element={<BrandingSettings />} />
                     <Route path="/reports" element={<Reports />} />
                     <Route path="/tax" element={<Tax />} />
