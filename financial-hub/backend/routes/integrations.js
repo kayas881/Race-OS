@@ -358,15 +358,19 @@ router.post('/platforms/:id/sync', auth, async (req, res) => {
     
     let revenueData;
     
+    // Calculate date range (last 30 days)
+    const endDate = new Date().toISOString().split('T')[0]; // Today in YYYY-MM-DD format
+    const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // 30 days ago
+    
     switch (platform.platform) {
       case 'youtube':
-        revenueData = await PlatformIntegrationService.getYouTubeRevenue(platform.accessToken, platform.channelId);
+        revenueData = await PlatformIntegrationService.getYouTubeRevenue(platform.accessToken, startDate, endDate);
         break;
       case 'twitch':
-        revenueData = await PlatformIntegrationService.getTwitchRevenue(platform.accessToken, platform.platformUserId);
+        revenueData = await PlatformIntegrationService.getTwitchRevenue(platform.accessToken, startDate, endDate);
         break;
       case 'patreon':
-        revenueData = await PlatformIntegrationService.getPatreonRevenue(platform.accessToken, platform.platformData.campaignId);
+        revenueData = await PlatformIntegrationService.getPatreonRevenue(platform.accessToken);
         break;
       default:
         return res.status(400).json({ error: 'Unsupported platform' });

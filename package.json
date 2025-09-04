@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Financial Hub for Race-OS - Complete tax management and transaction tracking",
   "scripts": {
-    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "dev": "npm run backend & npm run frontend",
     "backend": "cd financial-hub/backend && npm start",
     "frontend": "cd financial-hub/frontend && npm start",
     "install-all": "npm run install-backend && npm run install-frontend",
@@ -11,10 +11,10 @@
     "install-frontend": "cd financial-hub/frontend && npm install",
     "build": "cd financial-hub/frontend && npm run build",
     "test": "cd financial-hub/backend && npm test",
-    "start": "./start-dev.sh"
-  },
-  "devDependencies": {
-    "concurrently": "^8.2.2"
+    "start": "./scripts/start-dev.sh",
+    "clean": "npm run clean-backend && npm run clean-frontend",
+    "clean-backend": "cd financial-hub/backend && rm -rf node_modules",
+    "clean-frontend": "cd financial-hub/frontend && rm -rf node_modules"
   },
   "keywords": [
     "financial",

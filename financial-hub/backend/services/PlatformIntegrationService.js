@@ -26,25 +26,42 @@ class PlatformIntegrationService {
 
       const channel = channelResponse.data.items[0];
 
-      // Get analytics data
-      const analyticsResponse = await this.youtubeAnalytics.reports.query({
-        auth,
-        ids: `channel==${channel.id}`,
-        startDate,
-        endDate,
-        metrics: 'estimatedRevenue,estimatedAdRevenue,estimatedRedPartnerRevenue',
-        dimensions: 'day',
-      });
+      let revenueData = [];
+      let totalRevenue = 0;
+      let adRevenue = 0;
+      let membershipRevenue = 0;
 
-      const revenueData = analyticsResponse.data.rows || [];
-      
+      try {
+        // Try to get analytics data (requires YouTube Partner Program)
+        const analyticsResponse = await this.youtubeAnalytics.reports.query({
+          auth,
+          ids: `channel==${channel.id}`,
+          startDate,
+          endDate,
+          metrics: 'estimatedRevenue,estimatedAdRevenue,estimatedRedPartnerRevenue',
+          dimensions: 'day',
+        });
+
+        revenueData = analyticsResponse.data.rows || [];
+        totalRevenue = revenueData.reduce((sum, row) => sum + (row[1] || 0), 0);
+        adRevenue = revenueData.reduce((sum, row) => sum + (row[2] || 0), 0);
+        membershipRevenue = revenueData.reduce((sum, row) => sum + (row[3] || 0), 0);
+      } catch (analyticsError) {
+        console.log('Revenue data not available (channel may not be monetized):', analyticsError.message);
+        // Fallback: Return channel data without revenue metrics
+        totalRevenue = 0;
+        adRevenue = 0;
+        membershipRevenue = 0;
+        revenueData = [];
+      }
+
       return {
         platform: 'youtube',
         channelName: channel.snippet.title,
         channelId: channel.id,
-        totalRevenue: revenueData.reduce((sum, row) => sum + (row[1] || 0), 0),
-        adRevenue: revenueData.reduce((sum, row) => sum + (row[2] || 0), 0),
-        membershipRevenue: revenueData.reduce((sum, row) => sum + (row[3] || 0), 0),
+        totalRevenue,
+        adRevenue,
+        membershipRevenue,
         dailyBreakdown: revenueData.map(row => ({
           date: row[0],
           revenue: row[1] || 0,
@@ -54,6 +71,8 @@ class PlatformIntegrationService {
         subscriberCount: parseInt(channel.statistics.subscriberCount),
         videoCount: parseInt(channel.statistics.videoCount),
         viewCount: parseInt(channel.statistics.viewCount),
+        revenueDataAvailable: revenueData.length > 0,
+        message: revenueData.length === 0 ? 'Revenue data not available. Channel may not be monetized or part of YouTube Partner Program.' : null
       };
     } catch (error) {
       console.error('Error fetching YouTube revenue:', error);
@@ -164,6 +183,164 @@ class PlatformIntegrationService {
       console.error('Error fetching Patreon revenue:', error);
       throw new Error('Failed to fetch Patreon revenue data');
     }
+  }
+
+  // OAuth URL generation methods
+  async getYouTubeAuthUrl(userId) {
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+
+    const scopes = [
+      'https://www.googleapis.com/auth/youtube.readonly',
+      'https://www.googleapis.com/auth/yt-analytics.readonly',
+      'https://www.googleapis.com/auth/yt-analytics-monetary.readonly'
+    ];
+
+    const authUrl = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: scopes,
+      state: userId
+    });
+
+    return authUrl;
+  }
+
+  async getTwitchAuthUrl(userId) {
+    const clientId = process.env.TWITCH_CLIENT_ID;
+    const redirectUri = process.env.TWITCH_REDIRECT_URI;
+    const scope = 'channel:read:subscriptions+bits:read+channel:read:redemptions';
+    
+    const authUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${userId}`;
+    
+    return authUrl;
+  }
+
+  async getPatreonAuthUrl(userId) {
+    const clientId = process.env.PATREON_CLIENT_ID;
+    const redirectUri = process.env.PATREON_REDIRECT_URI;
+    const scope = 'identity+campaigns+pledges-to-me';
+    
+    const authUrl = `https://www.patreon.com/oauth2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${userId}`;
+    
+    return authUrl;
+  }
+
+  // OAuth callback handlers
+  async handleYouTubeCallback(code, userId) {
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    // Get channel info
+    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+    const channelResponse = await youtube.channels.list({
+      part: ['snippet', 'statistics'],
+      mine: true,
+    });
+
+    const channel = channelResponse.data.items[0];
+    
+    // Save integration to database
+    const PlatformIntegration = require('../models/PlatformIntegration');
+    const integration = new PlatformIntegration({
+      user: userId,
+      platform: 'youtube',
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      channelId: channel.id,
+      channelName: channel.snippet.title,
+      platformUserId: channel.id,
+      platformUsername: channel.snippet.title,
+      status: 'connected'
+    });
+
+    await integration.save();
+    return integration;
+  }
+
+  async handleTwitchCallback(code, userId) {
+    const tokenResponse = await axios.post('https://id.twitch.tv/oauth2/token', {
+      client_id: process.env.TWITCH_CLIENT_ID,
+      client_secret: process.env.TWITCH_CLIENT_SECRET,
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: process.env.TWITCH_REDIRECT_URI
+    });
+
+    const { access_token, refresh_token } = tokenResponse.data;
+
+    // Get user info
+    const userResponse = await axios.get('https://api.twitch.tv/helix/users', {
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+        'Client-Id': process.env.TWITCH_CLIENT_ID,
+      },
+    });
+
+    const user = userResponse.data.data[0];
+    
+    // Save integration to database
+    const PlatformIntegration = require('../models/PlatformIntegration');
+    const integration = new PlatformIntegration({
+      user: userId,
+      platform: 'twitch',
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      channelId: user.id,
+      channelName: user.display_name,
+      platformUserId: user.id,
+      platformUsername: user.display_name,
+      status: 'connected'
+    });
+
+    await integration.save();
+    return integration;
+  }
+
+  async handlePatreonCallback(code, userId) {
+    const tokenResponse = await axios.post('https://www.patreon.com/api/oauth2/token', {
+      code,
+      grant_type: 'authorization_code',
+      client_id: process.env.PATREON_CLIENT_ID,
+      client_secret: process.env.PATREON_CLIENT_SECRET,
+      redirect_uri: process.env.PATREON_REDIRECT_URI
+    });
+
+    const { access_token, refresh_token } = tokenResponse.data;
+
+    // Get campaign info
+    const campaignResponse = await axios.get('https://www.patreon.com/api/oauth2/v2/campaigns?include=creator', {
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+      },
+    });
+
+    const campaign = campaignResponse.data.data[0];
+    
+    // Save integration to database
+    const PlatformIntegration = require('../models/PlatformIntegration');
+    const integration = new PlatformIntegration({
+      user: userId,
+      platform: 'patreon',
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      channelId: campaign.id,
+      channelName: campaign.attributes.creation_name,
+      platformUserId: campaign.id,
+      platformUsername: campaign.attributes.creation_name,
+      status: 'connected'
+    });
+
+    await integration.save();
+    return integration;
   }
 
   // Generic method to fetch platform data
