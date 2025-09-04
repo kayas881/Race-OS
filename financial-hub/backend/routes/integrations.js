@@ -358,13 +358,17 @@ router.post('/platforms/:id/sync', auth, async (req, res) => {
     
     let revenueData;
     
-    // Calculate date range (last 30 days)
-    const endDate = new Date().toISOString().split('T')[0]; // Today in YYYY-MM-DD format
-    const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // 30 days ago
+    const endDate = new Date().toISOString().split('T')[0];
+    const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     
-    switch (platform.platform) {
+ switch (platform.platform) {
       case 'youtube':
-        revenueData = await PlatformIntegrationService.getYouTubeRevenue(platform.accessToken, startDate, endDate);
+        revenueData = await PlatformIntegrationService.getYouTubeRevenue(
+          platform.accessToken, 
+          platform.refreshToken,
+          startDate, 
+          endDate
+        );
         break;
       case 'twitch':
         revenueData = await PlatformIntegrationService.getTwitchRevenue(platform.accessToken, startDate, endDate);
@@ -377,7 +381,8 @@ router.post('/platforms/:id/sync', auth, async (req, res) => {
     }
     
     // Update platform with new revenue data
-    platform.revenueData.push(revenueData);
+ // This part should now work without validation errors
+    platform.revenueData.push(revenueData); 
     platform.lastSyncAt = new Date();
     await platform.save();
     

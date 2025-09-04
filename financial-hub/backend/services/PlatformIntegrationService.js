@@ -8,17 +8,27 @@ class PlatformIntegrationService {
   }
 
   // YouTube Integration
-  async getYouTubeRevenue(accessToken, startDate, endDate) {
-    try {
-      const auth = new google.auth.OAuth2();
-      auth.setCredentials({ access_token: accessToken });
+async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
+  try {
+    // MODIFIED: Initialize OAuth2 client with your app's credentials
+    const auth = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
 
-      // Get channel info
-      const channelResponse = await this.youtube.channels.list({
-        auth,
-        part: ['snippet', 'statistics', 'brandingSettings'],
-        mine: true,
-      });
+    // MODIFIED: Set both tokens. The library will handle refreshing.
+    auth.setCredentials({ 
+      access_token: accessToken,
+      refresh_token: refreshToken 
+    });
+
+    // Get channel info
+    const channelResponse = await this.youtube.channels.list({
+      auth, // Use the configured auth object
+      part: ['snippet', 'statistics', 'brandingSettings'],
+      mine: true,
+    });
 
       if (!channelResponse.data.items.length) {
         throw new Error('No YouTube channel found');
@@ -46,9 +56,8 @@ class PlatformIntegrationService {
         totalRevenue = revenueData.reduce((sum, row) => sum + (row[1] || 0), 0);
         adRevenue = revenueData.reduce((sum, row) => sum + (row[2] || 0), 0);
         membershipRevenue = revenueData.reduce((sum, row) => sum + (row[3] || 0), 0);
-      } catch (analyticsError) {
+   } catch (analyticsError) {
         console.log('Revenue data not available (channel may not be monetized):', analyticsError.message);
-        // Fallback: Return channel data without revenue metrics
         totalRevenue = 0;
         adRevenue = 0;
         membershipRevenue = 0;
@@ -57,6 +66,8 @@ class PlatformIntegrationService {
 
       return {
         platform: 'youtube',
+        // MODIFIED: Add a date field for the sync record
+        date: endDate, 
         channelName: channel.snippet.title,
         channelId: channel.id,
         totalRevenue,
