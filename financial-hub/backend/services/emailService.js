@@ -42,7 +42,7 @@ class EmailService {
   // Generate email templates with custom branding
   generateEmailTemplate(type, data, branding = null) {
     const defaultBranding = {
-      companyName: 'Financial Hub',
+      companyName: 'Race-OS',
       logo: null,
       primaryColor: '#3B82F6',
       secondaryColor: '#1F2937',

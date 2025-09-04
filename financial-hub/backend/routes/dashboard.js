@@ -607,7 +607,7 @@ router.get('/export/pdf', auth, async (req, res) => {
         </div>
 
         <div class="footer">
-          <p>This report was generated automatically by your Financial Hub system.</p>
+          <p>This report was generated automatically by your Race-OS system.</p>
         </div>
       </body>
       </html>

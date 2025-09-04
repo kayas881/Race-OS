@@ -13,13 +13,28 @@ if (process.env.NODE_ENV === 'development' || process.env.CODESPACES) {
   app.set('trust proxy', 1);
 }
 
-// Middleware
-app.use(helmet());
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
-}));
+// CORS Configuration for Codespaces
+const corsOptions = {
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:3001', 
+    'https://humble-space-waddle-q7qrj65r6p6h4qpg-3000.app.github.dev',
+    process.env.FRONTEND_URL
+  ].filter(Boolean), // Remove any undefined values
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['X-Total-Count']
+};
 
+app.use(cors(corsOptions));
+
+// Middleware
+app.use(
+  helmet({
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+  })
+);
 // Rate limiting with improved configuration
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -89,7 +104,7 @@ app.get('/health', (req, res) => {
 app.get('/api/status', (req, res) => {
   const dbStatus = database.getConnectionStatus();
   res.json({
-    application: 'Financial Hub API',
+    application: 'Race-OS API',
     version: '1.0.0',
     environment: process.env.NODE_ENV || 'development',
     database: dbStatus,
@@ -103,8 +118,8 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Financial Hub Backend running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Race-OS Backend running on port ${PORT}`);
   
   // Start notification scheduler
   if (process.env.NODE_ENV !== 'test') {

@@ -1,7 +1,7 @@
 {
   "name": "financial-hub-backend",
   "version": "1.0.0",
-  "description": "Financial Hub MVP Backend for Creators and Freelancers",
+  "description": "Race-OS MVP Backend for Creators and Freelancers",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
