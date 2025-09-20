@@ -312,6 +312,9 @@ class AppwriteService {
       process.env.APPWRITE_ENDPOINT,
       process.env.APPWRITE_PROJECT_ID,
       process.env.APPWRITE_API_KEY
+
+
+      
     );
     
     // Initialize database and collections

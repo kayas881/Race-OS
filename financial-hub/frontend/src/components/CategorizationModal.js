@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   XMarkIcon,
   SparklesIcon,
   CheckCircleIcon,
-  ExclamationTriangleIcon
 } from '@heroicons/react/24/outline';
+import { apiFetch } from '../utils/api';
 
 const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
   const [formData, setFormData] = useState({
@@ -23,7 +23,6 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
   });
   
   const [suggestions, setSuggestions] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Category options
@@ -47,6 +46,17 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
     'marketing', 'travel', 'meals', 'other'
   ];
 
+  const fetchSuggestions = useCallback(async () => {
+    if (!transaction) return;
+    
+    try {
+      const data = await apiFetch(`/api/transactions/${transaction._id}/categorization-suggestions`);
+      setSuggestions(data.suggestions || []);
+    } catch (error) {
+      console.error('Error fetching suggestions:', error);
+    }
+  }, [transaction]);
+
   useEffect(() => {
     if (isOpen && transaction) {
       // Initialize form with current transaction data
@@ -67,27 +77,7 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
       // Fetch categorization suggestions
       fetchSuggestions();
     }
-  }, [isOpen, transaction]);
-
-  const fetchSuggestions = async () => {
-    if (!transaction) return;
-    
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/transactions/${transaction._id}/categorization-suggestions`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setSuggestions(data.suggestions || []);
-      }
-    } catch (error) {
-      console.error('Error fetching suggestions:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [isOpen, transaction, fetchSuggestions]);
 
   const handleSuggestionClick = (suggestion) => {
     setFormData(prev => ({
@@ -108,22 +98,12 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
     setSaving(true);
 
     try {
-      const response = await fetch(`/api/transactions/${transaction._id}/categorize`, {
+      const data = await apiFetch(`/api/transactions/${transaction._id}/categorize`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(formData),
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        onUpdate(data.transaction);
-        onClose();
-      } else {
-        throw new Error('Failed to update categorization');
-      }
+      onUpdate(data.transaction);
+      onClose();
     } catch (error) {
       console.error('Error updating categorization:', error);
       alert('Failed to update categorization. Please try again.');
@@ -134,12 +114,7 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
 
   const retrainModel = async () => {
     try {
-      const response = await fetch('/api/transactions/retrain-model', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
-      const data = await response.json();
+      const data = await apiFetch('/api/transactions/retrain-model', { method: 'POST' });
       if (data.trained) {
         alert('Smart categorization model updated successfully!');
       } else {

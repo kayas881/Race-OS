@@ -13,8 +13,11 @@ import {
 import {
   CheckCircleIcon
 } from '@heroicons/react/24/solid';
+import { apiFetch } from '../utils/api';
+import { useAuth } from '../context/AuthContextAppwrite';
 
 const BrandingSettings = () => {
+  const { isAuthenticated } = useAuth();
   const [branding, setBranding] = useState({
     companyName: '',
     colors: {
@@ -73,24 +76,18 @@ const BrandingSettings = () => {
   const [message, setMessage] = useState({ type: '', text: '' });
 
   useEffect(() => {
-    fetchBranding();
-    fetchColorPalettes();
-  }, []);
+    if (isAuthenticated) {
+      fetchBranding();
+      fetchColorPalettes();
+    }
+  }, [isAuthenticated]);
 
   const fetchBranding = async () => {
     try {
-      const response = await fetch('/api/branding', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setBranding(data);
-        if (data.logo && data.logo.url) {
-          setLogoPreview(data.logo.url);
-        }
+      const data = await apiFetch('/api/branding');
+      setBranding(data);
+      if (data.logo && data.logo.url) {
+        setLogoPreview(data.logo.url);
       }
     } catch (error) {
       console.error('Error fetching branding:', error);
@@ -101,16 +98,8 @@ const BrandingSettings = () => {
 
   const fetchColorPalettes = async () => {
     try {
-      const response = await fetch('/api/branding/color-palette', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setColorPalettes(data);
-      }
+      const data = await apiFetch('/api/branding/color-palette');
+      setColorPalettes(data);
     } catch (error) {
       console.error('Error fetching color palettes:', error);
     }
@@ -119,25 +108,15 @@ const BrandingSettings = () => {
   const handleSave = async () => {
     try {
       setSaving(true);
-      const response = await fetch('/api/branding', {
+      await apiFetch('/api/branding', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(branding)
+        body: JSON.stringify(branding),
       });
-
-      if (response.ok) {
-        setMessage({ type: 'success', text: 'Branding settings saved successfully!' });
-        setTimeout(() => setMessage({ type: '', text: '' }), 3000);
-      } else {
-        const error = await response.json();
-        setMessage({ type: 'error', text: error.message || 'Error saving settings' });
-      }
+      setMessage({ type: 'success', text: 'Branding settings saved successfully!' });
+      setTimeout(() => setMessage({ type: '', text: '' }), 3000);
     } catch (error) {
       console.error('Error saving branding:', error);
-      setMessage({ type: 'error', text: 'Error saving settings' });
+      setMessage({ type: 'error', text: error.message || 'Error saving settings' });
     } finally {
       setSaving(false);
     }
@@ -151,27 +130,19 @@ const BrandingSettings = () => {
       const formData = new FormData();
       formData.append('logo', logoFile);
 
-      const response = await fetch('/api/branding/logo', {
+      const data = await apiFetch('/api/branding/logo', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: formData
+        body: formData,
+        headers: {}, // apiFetch will set Content-Type to multipart/form-data
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setLogoPreview(data.logo.url);
-        setLogoFile(null);
-        setMessage({ type: 'success', text: 'Logo uploaded successfully!' });
-        setTimeout(() => setMessage({ type: '', text: '' }), 3000);
-      } else {
-        const error = await response.json();
-        setMessage({ type: 'error', text: error.message || 'Error uploading logo' });
-      }
+      setLogoPreview(data.logo.url);
+      setLogoFile(null);
+      setMessage({ type: 'success', text: 'Logo uploaded successfully!' });
+      setTimeout(() => setMessage({ type: '', text: '' }), 3000);
     } catch (error) {
       console.error('Error uploading logo:', error);
-      setMessage({ type: 'error', text: 'Error uploading logo' });
+      setMessage({ type: 'error', text: error.message || 'Error uploading logo' });
     } finally {
       setUploadingLogo(false);
     }
@@ -179,18 +150,10 @@ const BrandingSettings = () => {
 
   const handleLogoRemove = async () => {
     try {
-      const response = await fetch('/api/branding/logo', {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-
-      if (response.ok) {
-        setLogoPreview(null);
-        setMessage({ type: 'success', text: 'Logo removed successfully!' });
-        setTimeout(() => setMessage({ type: '', text: '' }), 3000);
-      }
+      await apiFetch('/api/branding/logo', { method: 'DELETE' });
+      setLogoPreview(null);
+      setMessage({ type: 'success', text: 'Logo removed successfully!' });
+      setTimeout(() => setMessage({ type: '', text: '' }), 3000);
     } catch (error) {
       console.error('Error removing logo:', error);
       setMessage({ type: 'error', text: 'Error removing logo' });
@@ -236,31 +199,45 @@ const BrandingSettings = () => {
     }));
   };
 
-  const sendTestEmail = async (type) => {
+    const sendTestEmail = async (type) => {
     try {
-      const response = await fetch('/api/branding/test-email', {
+      await apiFetch('/api/branding/test-email', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ type })
+        body: JSON.stringify({ type }),
+      });
+      setMessage({ type: 'success', text: `Test ${type} email sent!` });
+      setTimeout(() => setMessage({ type: '', text: '' }), 3000);
+    } catch (error) {
+      console.error(`Error sending test ${type} email:`, error);
+      setMessage({ type: 'error', text: `Error sending test ${type} email` });
+    }
+  };
+
+  if (loading) {
+    return <div>Loading...</div>;
+  }
+
+  const previewInvoice = async () => {
+    try {
+      const response = await apiFetch('/api/branding/invoice-preview', {
+        method: 'POST',
+        body: JSON.stringify(branding),
       });
 
       if (response.ok) {
         const data = await response.json();
-        setMessage({ 
-          type: 'success', 
-          text: `Test email sent! ${data.testUrl ? `Preview: ${data.testUrl}` : ''}` 
-        });
-        setTimeout(() => setMessage({ type: '', text: '' }), 5000);
+        const blob = await (await fetch(data.pdfUrl)).blob();
+        const url = URL.createObjectURL(blob);
+
+        // Open the PDF in a new tab
+        window.open(url, '_blank');
       } else {
         const error = await response.json();
-        setMessage({ type: 'error', text: error.message || 'Error sending test email' });
+        setMessage({ type: 'error', text: error.message || 'Error generating invoice preview' });
       }
     } catch (error) {
-      console.error('Error sending test email:', error);
-      setMessage({ type: 'error', text: 'Error sending test email' });
+      console.error('Error generating invoice preview:', error);
+      setMessage({ type: 'error', text: 'Error generating invoice preview' });
     }
   };
 

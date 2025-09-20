@@ -4,12 +4,14 @@ import {
   ExclamationTriangleIcon,
   InformationCircleIcon,
   CalendarDaysIcon,
-  BanknotesIcon,
   XMarkIcon,
   Cog6ToothIcon
 } from '@heroicons/react/24/outline';
+import { useAuth } from '../context/AuthContextAppwrite';
+import { apiFetch } from '../utils/api';
 
 const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
+  const { isAuthenticated } = useAuth();
   const [notifications, setNotifications] = useState([]);
   const [quarterlyDates, setQuarterlyDates] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
@@ -21,9 +23,11 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
   });
 
   useEffect(() => {
-    fetchQuarterlyDates();
-    fetchTaxSettings();
-  }, []);
+    if (isAuthenticated) {
+      fetchQuarterlyDates();
+      fetchTaxSettings();
+    }
+  }, [isAuthenticated]);
 
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
@@ -32,15 +36,9 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const fetchQuarterlyDates = async () => {
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/tax/quarterly-dates`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setQuarterlyDates(data.upcomingDates);
-        setNotifications(prev => [...prev, ...data.reminders]);
-      }
+      const data = await apiFetch('/api/tax/quarterly-dates');
+      setQuarterlyDates(data.upcomingDates);
+      setNotifications(prev => [...prev, ...data.reminders]);
     } catch (error) {
       console.error('Error fetching quarterly dates:', error);
     }
@@ -48,14 +46,8 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const fetchTaxSettings = async () => {
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/tax/settings`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setTaxSettings(data);
-      }
+      const data = await apiFetch('/api/tax/settings');
+      setTaxSettings(data);
     } catch (error) {
       console.error('Error fetching tax settings:', error);
     }
@@ -63,20 +55,12 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const updateTaxSettings = async (newSettings) => {
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/tax/settings`, {
+      const data = await apiFetch('/api/tax/settings', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(newSettings)
+        body: JSON.stringify(newSettings),
       });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setTaxSettings(data.settings);
-        setShowSettings(false);
-      }
+      setTaxSettings(data.settings);
+      setShowSettings(false);
     } catch (error) {
       console.error('Error updating tax settings:', error);
     }
@@ -111,37 +95,29 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
   // Function to be called when new income is received
   const showIncomeSetAsideNotification = async (amount) => {
     try {
-      const response = await fetch('/api/tax/calculate-set-aside', {
+      const data = await apiFetch('/api/tax/calculate-set-aside', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ amount })
+        body: JSON.stringify({ amount }),
       });
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        const notification = {
-          id: Date.now(),
-          type: 'info',
-          title: 'New Income Received',
-          message: data.notification.message,
-          breakdown: data.notification.breakdown,
-          netIncome: data.notification.netIncome,
-          amount: amount,
-          timestamp: new Date(),
-          autoHide: false
-        };
 
-        setNotifications(prev => [notification, ...prev]);
-        
-        // Auto-hide after 30 seconds
-        setTimeout(() => {
-          dismissNotification(0);
-        }, 30000);
-      }
+      const notification = {
+        id: Date.now(),
+        type: 'info',
+        title: 'New Income Received',
+        message: data.notification.message,
+        breakdown: data.notification.breakdown,
+        netIncome: data.notification.netIncome,
+        amount: amount,
+        timestamp: new Date(),
+        autoHide: false
+      };
+
+      setNotifications(prev => [notification, ...prev]);
+      
+      // Auto-hide after 30 seconds
+      setTimeout(() => {
+        dismissNotification(0);
+      }, 30000);
     } catch (error) {
       console.error('Error calculating set-aside:', error);
     }

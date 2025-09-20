@@ -1,17 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   UserGroupIcon,
   PlusIcon,
   MagnifyingGlassIcon,
   ExclamationTriangleIcon,
-  CurrencyDollarIcon,
   EnvelopeIcon,
   PhoneIcon,
   BuildingOfficeIcon,
   EyeIcon,
-  PencilIcon,
-  TrashIcon,
   DocumentTextIcon
 } from '@heroicons/react/24/outline';
 import {
@@ -19,8 +16,11 @@ import {
   ExclamationCircleIcon,
   ClockIcon
 } from '@heroicons/react/24/solid';
+import { apiFetch } from '../utils/api';
+import { useAuth } from '../context/AuthContextAppwrite';
 
 const Clients = () => {
+  const { isAuthenticated } = useAuth();
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -36,11 +36,7 @@ const Clients = () => {
     total: 0
   });
 
-  useEffect(() => {
-    fetchClients();
-  }, [searchTerm, statusFilter, sortBy, sortOrder, pagination.currentPage]);
-
-  const fetchClients = async () => {
+  const fetchClients = useCallback(async () => {
     try {
       setLoading(true);
       const params = new URLSearchParams({
@@ -52,74 +48,59 @@ const Clients = () => {
         sortOrder
       });
 
-      const response = await fetch(`/api/clients?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+      const data = await apiFetch(`/api/clients?${params}`);
+      setClients(data.clients);
+      setPagination({
+        currentPage: data.currentPage,
+        totalPages: data.totalPages,
+        total: data.total
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        setClients(data.clients);
-        setPagination({
-          currentPage: data.currentPage,
-          totalPages: data.totalPages,
-          total: data.total
-        });
-      }
     } catch (error) {
       console.error('Error fetching clients:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [pagination.currentPage, searchTerm, statusFilter, sortBy, sortOrder]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchClients();
+    }
+  }, [isAuthenticated, fetchClients]);
 
   const handleAddClient = async (clientData) => {
     try {
-      const response = await fetch('/api/clients', {
+      await apiFetch('/api/clients', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(clientData)
+        body: JSON.stringify(clientData),
       });
-
-      if (response.ok) {
-        await fetchClients();
-        setShowAddModal(false);
-      } else {
-        const error = await response.json();
-        alert(error.message || 'Error creating client');
-      }
+      await fetchClients();
+      setShowAddModal(false);
     } catch (error) {
       console.error('Error creating client:', error);
-      alert('Error creating client');
+      alert(error.message || 'Error creating client');
     }
   };
 
-  const handleQuickInvoice = async (clientId, invoiceData) => {
+    const handleQuickInvoice = async (clientId, invoiceData) => {
     try {
-      const response = await fetch(`/api/clients/${clientId}/quick-invoice`, {
+      await apiFetch(`/api/clients/${clientId}/quick-invoice`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(invoiceData)
+        body: JSON.stringify(invoiceData),
       });
-
-      if (response.ok) {
-        alert('Invoice created successfully!');
-        await fetchClients();
-      } else {
-        const error = await response.json();
-        alert(error.message || 'Error creating invoice');
-      }
+      alert('Invoice created successfully!');
+      await fetchClients();
     } catch (error) {
       console.error('Error creating invoice:', error);
-      alert('Error creating invoice');
+      alert(error.message || 'Error creating invoice');
     }
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(amount);
   };
 
   const getStatusIcon = (status) => {

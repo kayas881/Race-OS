@@ -21,6 +21,14 @@ const Integrations = () => {
   const [syncingId, setSyncingId] = useState(null);
   const [uploadingCSV, setUploadingCSV] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [disconnectConfirm, setDisconnectConfirm] = useState({
+    isOpen: false,
+    integrationId: null,
+    integrationType: null,
+    title: '',
+    message: '',
+    onConfirm: null
+  });
 
   useEffect(() => {
     fetchData();
@@ -187,24 +195,39 @@ const Integrations = () => {
   };
 
   const disconnectIntegration = async (id, type) => {
-    if (!window.confirm('Are you sure you want to disconnect this integration?')) return;
-    
-    try {
-      const response = await apiFetch(`api/integrations/${type}/${id}`, {
-        method: 'DELETE'
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+    setDisconnectConfirm({
+      isOpen: true,
+      integrationId: id,
+      integrationType: type,
+      title: 'Disconnect Integration',
+      message: 'Are you sure you want to disconnect this integration? This will remove access to your data from this platform.',
+      onConfirm: async () => {
+        try {
+          const response = await apiFetch(`api/integrations/${type}/${id}`, {
+            method: 'DELETE'
+          });
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          alert('Integration disconnected successfully');
+          fetchData(); // Refresh data
+          setDisconnectConfirm({ 
+            isOpen: false, 
+            integrationId: null, 
+            integrationType: null, 
+            title: '', 
+            message: '', 
+            onConfirm: null 
+          });
+          
+        } catch (error) {
+          console.error('Error disconnecting:', error);
+          alert('Failed to disconnect integration');
+        }
       }
-      
-      alert('Integration disconnected successfully');
-      fetchData(); // Refresh data
-      
-    } catch (error) {
-      console.error('Error disconnecting:', error);
-      alert(`Disconnect failed: ${error.message}`);
-    }
+    });
   };
 
   const handleCSVUpload = async () => {
@@ -440,6 +463,41 @@ const Integrations = () => {
           <p className="mt-1 text-sm text-gray-500">
             Get started by connecting your first financial account or platform
           </p>
+        </div>
+      )}
+
+      {/* Disconnect Confirmation Modal */}
+      {disconnectConfirm.isOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-md w-full p-6">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">
+              {disconnectConfirm.title}
+            </h3>
+            <p className="text-sm text-gray-500 mb-6">
+              {disconnectConfirm.message}
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setDisconnectConfirm({ 
+                  isOpen: false, 
+                  integrationId: null, 
+                  integrationType: null, 
+                  title: '', 
+                  message: '', 
+                  onConfirm: null 
+                })}
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={disconnectConfirm.onConfirm}
+                className="px-4 py-2 bg-red-600 border border-transparent rounded-md text-sm font-medium text-white hover:bg-red-700"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

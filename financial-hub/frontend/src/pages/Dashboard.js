@@ -2,12 +2,8 @@ import React from 'react';
 import { useQuery } from 'react-query';
 import { 
   DollarSign, 
-  TrendingUp, 
   AlertTriangle, 
-  PiggyBank,
   Calendar,
-  Eye,
-  EyeOff,
   FileText,
   Clock,
   CheckCircle,
@@ -21,20 +17,25 @@ import RecentTransactions from '../components/RecentTransactions';
 import QuickStats from '../components/QuickStats';
 import NotificationWidget from '../components/NotificationWidget';
 import { apiFetch } from '../utils/api';
+import { useAuth } from '../context/AuthContextAppwrite';
 
 const Dashboard = () => {
+  const { isAuthenticated } = useAuth();
+
   const { data: dashboardData, isLoading, error } = useQuery(
     'dashboard',
-    () => apiFetch('api/dashboard').then(res => res.json()),
+    () => apiFetch('/api/dashboard'),
     {
+      enabled: isAuthenticated, // Only run the query if authenticated
       refetchInterval: 30000, // Refetch every 30 seconds
     }
   );
 
   const { data: invoiceData, isLoading: invoicesLoading, error: invoicesError } = useQuery(
     'invoices',
-    () => apiFetch('api/invoices').then(res => res.json()),
+    () => apiFetch('/api/invoices'),
     {
+      enabled: isAuthenticated, // Only run the query if authenticated
       refetchInterval: 30000,
     }
   );
@@ -288,14 +289,11 @@ const Dashboard = () => {
                   <button 
                     onClick={async () => {
                       try {
-                        const response = await fetch('/api/transactions/retrain-model', {
-                          method: 'POST',
-                          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-                        });
-                        const data = await response.json();
+                        const data = await apiFetch('/api/transactions/retrain-model', { method: 'POST' });
                         alert(data.message);
                       } catch (error) {
                         console.error('Error retraining model:', error);
+                        alert('Failed to retrain model.');
                       }
                     }}
                     className="w-full text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center justify-center"

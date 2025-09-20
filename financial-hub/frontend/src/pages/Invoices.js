@@ -27,6 +27,13 @@ const Invoices = () => {
   const [stats, setStats] = useState({});
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({});
+  const [deleteConfirm, setDeleteConfirm] = useState({
+    isOpen: false,
+    invoiceId: null,
+    title: '',
+    message: '',
+    onConfirm: null
+  });
 
   useEffect(() => {
     fetchInvoices();
@@ -109,27 +116,34 @@ const Invoices = () => {
   };
 
   const handleDelete = async (invoiceId) => {
-    if (!window.confirm('Are you sure you want to delete this invoice?')) return;
+    setDeleteConfirm({
+      isOpen: true,
+      invoiceId,
+      title: 'Delete Invoice',
+      message: 'Are you sure you want to delete this invoice? This action cannot be undone.',
+      onConfirm: async () => {
+        try {
+          const token = localStorage.getItem('token');
+          const response = await fetch(`/api/invoices/${invoiceId}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
 
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`/api/invoices/${invoiceId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
+          if (response.ok) {
+            fetchInvoices();
+            fetchStats();
+            setDeleteConfirm({ isOpen: false, invoiceId: null, title: '', message: '', onConfirm: null });
+          } else {
+            const data = await response.json();
+            setError(data.error || 'Failed to delete invoice');
+          }
+        } catch (error) {
+          setError('Network error');
         }
-      });
-
-      if (response.ok) {
-        fetchInvoices();
-        fetchStats();
-      } else {
-        const data = await response.json();
-        setError(data.error || 'Failed to delete invoice');
       }
-    } catch (error) {
-      setError('Network error');
-    }
+    });
   };
 
   const downloadPDF = async (invoiceId, invoiceNumber) => {
@@ -504,6 +518,40 @@ const Invoices = () => {
             fetchStats();
           }}
         />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm.isOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-md w-full p-6">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">
+              {deleteConfirm.title}
+            </h3>
+            <p className="text-sm text-gray-500 mb-6">
+              {deleteConfirm.message}
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setDeleteConfirm({ 
+                  isOpen: false, 
+                  invoiceId: null, 
+                  title: '', 
+                  message: '', 
+                  onConfirm: null 
+                })}
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={deleteConfirm.onConfirm}
+                className="px-4 py-2 bg-red-600 border border-transparent rounded-md text-sm font-medium text-white hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

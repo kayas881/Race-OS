@@ -13,8 +13,11 @@ import {
   CheckCircleIcon,
   ExclamationCircleIcon
 } from '@heroicons/react/24/solid';
+import { apiFetch } from '../utils/api';
+import { useAuth } from '../context/AuthContextAppwrite';
 
 const ClientDashboard = () => {
+  const { isAuthenticated } = useAuth();
   const [dashboardData, setDashboardData] = useState({
     summary: {
       totalClients: 0,
@@ -30,22 +33,16 @@ const ClientDashboard = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    if (isAuthenticated) {
+      fetchDashboardData();
+    }
+  }, [isAuthenticated]);
 
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/clients/dashboard', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setDashboardData(data);
-      }
+      const data = await apiFetch('/api/clients/dashboard');
+      setDashboardData(data);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {
