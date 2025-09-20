@@ -1,6 +1,5 @@
 import React from 'react';
 import { useQuery } from 'react-query';
-import axios from 'axios';
 import { 
   DollarSign, 
   TrendingUp, 
@@ -21,11 +20,12 @@ import IncomeChart from '../components/IncomeChart';
 import RecentTransactions from '../components/RecentTransactions';
 import QuickStats from '../components/QuickStats';
 import NotificationWidget from '../components/NotificationWidget';
+import { apiFetch } from '../utils/api';
 
 const Dashboard = () => {
   const { data: dashboardData, isLoading, error } = useQuery(
     'dashboard',
-    () => axios.get('/api/dashboard').then(res => res.data),
+    () => apiFetch('api/dashboard').then(res => res.json()),
     {
       refetchInterval: 30000, // Refetch every 30 seconds
     }
@@ -33,7 +33,7 @@ const Dashboard = () => {
 
   const { data: invoiceData, isLoading: invoicesLoading, error: invoicesError } = useQuery(
     'invoices',
-    () => axios.get('/api/invoices').then(res => res.data),
+    () => apiFetch('api/invoices').then(res => res.json()),
     {
       refetchInterval: 30000,
     }
@@ -71,14 +71,14 @@ const Dashboard = () => {
   }
 
   const {
-    accounts,
-    monthlySummary,
-    quarterlySummary,
-    taxJarStatus,
-    recentTransactions,
-    incomeTrend,
-    alerts
-  } = dashboardData;
+    accounts = [],
+    monthlySummary = {},
+    quarterlySummary = {},
+    taxJarStatus = {},
+    recentTransactions = [],
+    incomeTrend = [],
+    alerts = []
+  } = dashboardData || {};
 
   // Calculate invoice metrics
   const getInvoiceMetrics = () => {
@@ -320,26 +320,26 @@ const Dashboard = () => {
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Business Income</span>
                 <span className="font-semibold text-green-600">
-                  ${quarterlySummary.businessIncome?.toLocaleString() || '0'}
+                  ${(quarterlySummary?.businessIncome || 0).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Business Expenses</span>
                 <span className="font-semibold text-red-600">
-                  ${quarterlySummary.businessExpenses?.toLocaleString() || '0'}
+                  ${(quarterlySummary?.businessExpenses || 0).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Deductible Expenses</span>
                 <span className="font-semibold text-blue-600">
-                  ${quarterlySummary.deductibleExpenses?.toLocaleString() || '0'}
+                  ${(quarterlySummary?.deductibleExpenses || 0).toLocaleString()}
                 </span>
               </div>
               <div className="border-t pt-4">
                 <div className="flex justify-between items-center">
                   <span className="font-medium text-gray-900">Net Income</span>
                   <span className="font-bold text-lg text-gray-900">
-                    ${(quarterlySummary.businessIncome - quarterlySummary.businessExpenses)?.toLocaleString() || '0'}
+                    ${((quarterlySummary?.businessIncome || 0) - (quarterlySummary?.businessExpenses || 0)).toLocaleString()}
                   </span>
                 </div>
               </div>
@@ -354,15 +354,15 @@ const Dashboard = () => {
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Total Accounts</span>
-                <span className="font-semibold">{accounts.total}</span>
+                <span className="font-semibold">{accounts?.total || 0}</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Total Balance</span>
                 <span className="font-semibold text-green-600">
-                  ${accounts.totalBalance?.toLocaleString() || '0'}
+                  ${(accounts?.totalBalance || 0).toLocaleString()}
                 </span>
               </div>
-              {accounts.byPlatform && Object.entries(accounts.byPlatform).map(([platform, count]) => (
+              {accounts?.byPlatform && Object.entries(accounts.byPlatform).map(([platform, count]) => (
                 <div key={platform} className="flex justify-between items-center">
                   <span className="text-sm text-gray-600 capitalize">{platform}</span>
                   <span className="text-sm font-medium">{count} account{count !== 1 ? 's' : ''}</span>
@@ -380,7 +380,7 @@ const Dashboard = () => {
 const ClientOverviewWidget = () => {
   const { data: clientData, isLoading } = useQuery(
     'clientDashboard',
-    () => axios.get('/api/clients/dashboard').then(res => res.data),
+    () => fetch('/api/clients/dashboard').then(res => res.json()),
     {
       refetchInterval: 60000, // Refetch every minute
     }

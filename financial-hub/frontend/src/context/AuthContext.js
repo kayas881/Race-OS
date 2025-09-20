@@ -1,20 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import axios from 'axios';
-
-// Configure axios base URL for Codespaces
-const API_BASE_URL = process.env.REACT_APP_API_URL || '';
-if (API_BASE_URL) {
-  axios.defaults.baseURL = API_BASE_URL;
-}
-
-// Configure axios for CORS in Codespaces
-axios.defaults.withCredentials = true;
-axios.defaults.headers.common['Content-Type'] = 'application/json';
-
-// Debug logging for development
-if (process.env.NODE_ENV === 'development') {
-  console.log('🔧 AuthContext API Base URL:', API_BASE_URL || 'Using relative URLs');
-}
+import { account, databases, DATABASE_ID, COLLECTIONS } from '../utils/appwrite';
+import { ID } from 'appwrite';
 
 const AuthContext = createContext();
 
@@ -29,94 +15,95 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [token, setToken] = useState(localStorage.getItem('token'));
 
-  // Set up axios interceptor
-  useEffect(() => {
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    } else {
-      delete axios.defaults.headers.common['Authorization'];
-    }
-  }, [token]);
-
-  // Check if user is authenticated on app load
   useEffect(() => {
     const checkAuth = async () => {
-      if (token) {
-        try {
-          const response = await axios.get('/api/auth/me');
-          setUser(response.data);
-        } catch (error) {
-          console.error('Auth check failed:', error);
-          logout();
-        }
+      try {
+        const currentUser = await account.get();
+        const userDocument = await databases.getDocument(
+            DATABASE_ID,
+            COLLECTIONS.users,
+            currentUser.$id
+        );
+        setUser(userDocument);
+      } catch (error) {
+        setUser(null);
       }
       setLoading(false);
     };
 
     checkAuth();
-  }, [token]);
+  }, []);
 
   const login = async (email, password) => {
     try {
-      const response = await axios.post('/api/auth/login', { email, password });
-      const { token: newToken, user: userData } = response.data;
-      
-      localStorage.setItem('token', newToken);
-      setToken(newToken);
-      setUser(userData);
-      
+      await account.createEmailPasswordSession(email, password);
+      const currentUser = await account.get();
+        const userDocument = await databases.getDocument(
+            DATABASE_ID,
+            COLLECTIONS.users,
+            currentUser.$id
+        );
+      setUser(userDocument);
       return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.error || 'Login failed'
+        error: error.message || 'Login failed'
       };
     }
   };
 
   const register = async (userData) => {
     try {
-      const response = await axios.post('/api/auth/register', userData);
-      const { token: newToken, user: newUser } = response.data;
-      
-      localStorage.setItem('token', newToken);
-      setToken(newToken);
-      setUser(newUser);
-      
+        const { email, password, firstName, lastName } = userData;
+      const newUser = await account.create(ID.unique(), email, password, `${firstName} ${lastName}`);
+      const userDocument = await databases.createDocument(
+            DATABASE_ID,
+            COLLECTIONS.users,
+            newUser.$id,
+            userData
+      );
+      setUser(userDocument);
+      await account.createEmailPasswordSession(email, password);
       return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.error || 'Registration failed'
+        error: error.message || 'Registration failed'
       };
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    setToken(null);
-    setUser(null);
-    delete axios.defaults.headers.common['Authorization'];
+  const logout = async () => {
+    try {
+      await account.deleteSession('current');
+      setUser(null);
+    } catch (error) {
+        console.error("Logout failed:", error);
+    }
   };
 
   const updateProfile = async (profileData) => {
     try {
-      const response = await axios.put('/api/auth/profile', profileData);
-      setUser(response.data.user);
+      const response = await databases.updateDocument(
+            DATABASE_ID,
+            COLLECTIONS.users,
+            user.$id,
+            profileData
+      );
+      setUser(response);
       return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.error || 'Profile update failed'
+        error: error.message || 'Profile update failed'
       };
     }
   };
 
   const value = {
     user,
-    token,
     loading,
     login,
     register,

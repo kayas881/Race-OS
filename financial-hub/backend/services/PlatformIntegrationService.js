@@ -36,6 +36,12 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
 
       const channel = channelResponse.data.items[0];
 
+      // Check if demo mode is enabled for testing
+      if (process.env.YOUTUBE_DEMO_MODE === 'true') {
+        console.log('🎬 Demo mode: Returning mock YouTube revenue data');
+        return this.generateMockYouTubeData(channel, startDate, endDate);
+      }
+
       let revenueData = [];
       let totalRevenue = 0;
       let adRevenue = 0;
@@ -56,8 +62,32 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
         totalRevenue = revenueData.reduce((sum, row) => sum + (row[1] || 0), 0);
         adRevenue = revenueData.reduce((sum, row) => sum + (row[2] || 0), 0);
         membershipRevenue = revenueData.reduce((sum, row) => sum + (row[3] || 0), 0);
-   } catch (analyticsError) {
+      } catch (analyticsError) {
         console.log('Revenue data not available (channel may not be monetized):', analyticsError.message);
+        
+        // Handle specific error codes
+        if (analyticsError.code === 403 || analyticsError.status === 403) {
+          console.log('403 Forbidden: Channel not monetized or insufficient permissions');
+          return {
+            platform: 'youtube',
+            date: new Date().toISOString().split('T')[0],
+            channelName: channel.snippet.title,
+            channelId: channel.id,
+            totalRevenue: 0,
+            adRevenue: 0,
+            membershipRevenue: 0,
+            dailyBreakdown: [],
+            subscriberCount: parseInt(channel.statistics.subscriberCount),
+            videoCount: parseInt(channel.statistics.videoCount),
+            viewCount: parseInt(channel.statistics.viewCount),
+            revenueDataAvailable: false,
+            message: 'No revenue data available — channel not monetized.',
+            note: 'Channel needs to be part of YouTube Partner Program to access revenue data',
+            currency: 'USD'
+          };
+        }
+        
+        // Fallback for other errors
         totalRevenue = 0;
         adRevenue = 0;
         membershipRevenue = 0;
@@ -89,6 +119,48 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
       console.error('Error fetching YouTube revenue:', error);
       throw new Error('Failed to fetch YouTube revenue data');
     }
+  }
+
+  // Generate mock YouTube data for testing non-monetized channels
+  generateMockYouTubeData(channel, startDate, endDate) {
+    // Generate realistic mock data for the date range
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const dailyBreakdown = [];
+    
+    // Generate daily mock data
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      dailyBreakdown.push({
+        date: dateStr,
+        revenue: Math.random() * 50 + 10, // Random revenue between $10-60
+        adRevenue: Math.random() * 40 + 5, // Random ad revenue between $5-45
+        membershipRevenue: Math.random() * 20 + 2, // Random membership revenue between $2-22
+      });
+    }
+
+    const totalRevenue = dailyBreakdown.reduce((sum, day) => sum + day.revenue, 0);
+    const adRevenue = dailyBreakdown.reduce((sum, day) => sum + day.adRevenue, 0);
+    const membershipRevenue = dailyBreakdown.reduce((sum, day) => sum + day.membershipRevenue, 0);
+
+    return {
+      platform: 'youtube',
+      date: new Date().toISOString().split('T')[0],
+      channelName: channel.snippet.title,
+      channelId: channel.id,
+      totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+      adRevenue: parseFloat(adRevenue.toFixed(2)),
+      membershipRevenue: parseFloat(membershipRevenue.toFixed(2)),
+      dailyBreakdown,
+      subscriberCount: parseInt(channel.statistics.subscriberCount),
+      videoCount: parseInt(channel.statistics.videoCount),
+      viewCount: parseInt(channel.statistics.viewCount),
+      revenueDataAvailable: true,
+      message: '🎬 Demo Mode: Mock revenue data for testing',
+      note: 'This is simulated data for development and testing purposes',
+      currency: 'USD',
+      isDemoData: true
+    };
   }
 
   // Twitch Integration

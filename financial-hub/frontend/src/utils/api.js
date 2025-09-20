@@ -1,3 +1,6 @@
+// Import Appwrite client for session management
+import { account } from './appwrite';
+
 // API utility for handling different environments (local vs Codespaces)
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -14,6 +17,63 @@ export const getApiUrl = (endpoint) => {
   return `/${cleanEndpoint}`;
 };
 
+// Function to get Appwrite session token
+const getSessionToken = async () => {
+  try {
+    // Try to get current session from Appwrite
+    const session = await account.getSession('current');
+    console.log('🔍 Retrieved session for API:', session?.$id);
+    if (session?.$id) {
+      return session.$id;
+    }
+    if (session?.secret) {
+      return session.secret;
+    }
+  } catch (error) {
+    console.log('❌ Could not get session from Appwrite:', error.message);
+  }
+
+  // Fallback to cookie parsing
+  console.log('🍪 All cookies:', document.cookie);
+  
+  const cookies = document.cookie.split(';');
+  const projectId = process.env.REACT_APP_APPWRITE_PROJECT_ID;
+  
+  console.log('🔍 Looking for session cookie with project ID:', projectId);
+  
+  // Check all possible Appwrite session cookie patterns
+  const possibleNames = [
+    `a_session_${projectId}`,
+    `a_session_${projectId}_legacy`,
+    `a_session_console`,
+    `a_session`
+  ];
+  
+  for (let cookie of cookies) {
+    const [name, value] = cookie.trim().split('=');
+    console.log('🍪 Found cookie:', name, 'with value length:', value?.length || 0);
+    
+    // Check if this cookie matches any of our expected patterns
+    if (possibleNames.includes(name) || name.startsWith('a_session_')) {
+      console.log('✅ Found potential session cookie:', name);
+      if (value && value !== 'null' && value !== '') {
+        const decoded = decodeURIComponent(value);
+        console.log('🔓 Decoded session token preview:', decoded.substring(0, 20) + '...');
+        return decoded;
+      }
+    }
+  }
+  
+  // Fallback to window variable
+  if (window.appwriteSession) {
+    console.log('🔑 Using session from window variable');
+    return window.appwriteSession;
+  }
+  
+  console.log('❌ No valid session token found');
+  return null;
+};
+
 // Enhanced fetch wrapper that handles API URL construction and common options
 export const apiFetch = async (endpoint, options = {}) => {
   const url = getApiUrl(endpoint);
@@ -27,10 +87,12 @@ export const apiFetch = async (endpoint, options = {}) => {
     ...options,
   };
 
-  // Add Authorization header if token exists
-  const token = localStorage.getItem('token');
-  if (token) {
-    defaultOptions.headers['Authorization'] = `Bearer ${token}`;
+  // Get Appwrite session token (now async)
+  let sessionToken = await getSessionToken();
+  
+  // Add session token as Authorization header if available
+  if (sessionToken) {
+    defaultOptions.headers['Authorization'] = `Bearer ${sessionToken}`;
   }
 
   try {
@@ -39,6 +101,7 @@ export const apiFetch = async (endpoint, options = {}) => {
     // Log API calls in development
     if (process.env.NODE_ENV === 'development') {
       console.log(`🌐 API Call: ${options.method || 'GET'} ${url}`);
+      console.log(`🔑 Session Token: ${sessionToken ? 'Present' : 'Missing'}`);
       if (!response.ok) {
         console.error(`❌ API Error: ${response.status} ${response.statusText}`);
       }

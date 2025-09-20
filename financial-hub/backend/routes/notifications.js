@@ -4,7 +4,7 @@ const auth = require('../middleware/auth');
 const notificationScheduler = require('../services/notificationScheduler');
 const emailService = require('../services/emailService');
 const Invoice = require('../models/Invoice');
-const User = require('../models/User');
+const appwriteService = require('../config/appwrite');
 const Branding = require('../models/Branding');
 
 // @route   GET /api/notifications/status

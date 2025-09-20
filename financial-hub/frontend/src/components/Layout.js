@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContextAppwrite';
 import { 
   LayoutDashboard, 
   CreditCard, 
@@ -105,13 +105,13 @@ const Layout = ({ children }) => {
             <div className="flex-shrink-0">
               <div className="h-8 w-8 bg-primary-600 rounded-full flex items-center justify-center">
                 <span className="text-sm font-medium text-white">
-                  {user?.firstName?.[0]}{user?.lastName?.[0]}
+                  {(user?.name?.split(' ')?.[0]?.[0] || '')}{(user?.name?.split(' ')?.[1]?.[0] || '')}
                 </span>
               </div>
             </div>
             <div className="ml-3 flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-900 truncate">
-                {user?.firstName} {user?.lastName}
+                {user?.name || 'User'}
               </p>
               <p className="text-xs text-gray-500 truncate">
                 {user?.email}

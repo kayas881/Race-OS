@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { useAuth } from './context/AuthContext';
+import { useAuth } from './context/AuthContextAppwrite';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Transactions from './pages/Transactions';
@@ -12,6 +12,7 @@ import Integrations from './pages/Integrations';
 import BrandingSettings from './pages/BrandingSettings';
 import Reports from './pages/Reports';
 import Login from './pages/Login';
+import Ping from './pages/Ping';
 import Register from './pages/Register';
 import OAuthCallback from './pages/OAuthCallback';
 import LoadingSpinner from './components/LoadingSpinner';
@@ -20,6 +21,9 @@ import TaxNotificationSystem from './components/TaxNotificationSystem';
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
   const taxNotificationRef = useRef();
+
+  // Debug authentication state
+  console.log('🔐 App Auth State:', { user: !!user, loading, isAuthenticated });
 
   // Make tax notification system globally available
   useEffect(() => {
@@ -40,6 +44,10 @@ function App() {
     <div className="App">
       <Routes>
         {/* Public routes */}
+        <Route 
+          path="/ping" 
+          element={<Ping />} 
+        />
         <Route 
           path="/login" 
           element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />} 
@@ -76,7 +84,7 @@ function App() {
                     <Route path="*" element={<Navigate to="/dashboard" />} />
                   </Routes>
                 </Layout>
-                <TaxNotificationSystem ref={taxNotificationRef} userId={user?.id} />
+                <TaxNotificationSystem ref={taxNotificationRef} userId={user?.$id} />
               </>
             ) : (
               <Navigate to="/login" />

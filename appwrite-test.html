@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Appwrite Connection Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/appwrite@15.0.0"></script>
+</head>
+<body>
+    <h1>Appwrite Connection Test</h1>
+    <div id="status">Testing connection...</div>
+    <button onclick="testConnection()">Test SDK Connection</button>
+    <div id="result"></div>
+
+    <script>
+        const endpoint = 'https://fra.cloud.appwrite.io/v1';
+        const projectId = 'ayanayan';
+        
+        console.log('🔧 Initializing Appwrite client...', { endpoint, projectId });
+        
+        const client = new Appwrite.Client();
+        client.setEndpoint(endpoint).setProject(projectId);
+        
+        const locale = new Appwrite.Locale(client);
+        
+        async function testConnection() {
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('result');
+            
+            statusDiv.textContent = 'Testing SDK connection...';
+            resultDiv.innerHTML = '';
+            
+            try {
+                console.log('📡 Sending Appwrite SDK request...');
+                const result = await locale.get();
+                console.log('✅ SDK connection successful:', result);
+                
+                statusDiv.textContent = 'Connection successful!';
+                resultDiv.innerHTML = `<pre style="background: #f0f8f0; padding: 10px; border-radius: 4px;">${JSON.stringify(result, null, 2)}</pre>`;
+            } catch (error) {
+                console.error('❌ SDK connection failed:', error);
+                statusDiv.textContent = 'Connection failed!';
+                resultDiv.innerHTML = `<div style="background: #f8f0f0; padding: 10px; border-radius: 4px; color: red;">Error: ${error.message}</div>`;
+            }
+        }
+        
+        // Auto-test on page load
+        window.addEventListener('load', () => {
+            setTimeout(testConnection, 1000);
+        });
+    </script>
+</body>
+</html>

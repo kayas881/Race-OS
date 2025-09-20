@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from 'react-query';
 import { ReactQueryDevtools } from 'react-query/devtools';
 import { Toaster } from 'react-hot-toast';
 import App from './App';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContextAppwrite';
 import './index.css';
 
 const queryClient = new QueryClient({

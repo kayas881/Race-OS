@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const database = require('./config/database');
+const appwriteService = require('./config/appwrite');
 require('dotenv').config();
 
 const app = express();
@@ -55,14 +55,20 @@ app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Database connection
-database.connect().catch(err => {
-  console.error('Failed to connect to database:', err);
-  process.exit(1);
+// Initialize Appwrite
+appwriteService.initializeClient(
+  process.env.APPWRITE_ENDPOINT,
+  process.env.APPWRITE_PROJECT_ID,
+  process.env.APPWRITE_API_KEY
+);
+
+// Initialize Appwrite database and collections
+appwriteService.init().catch(err => {
+  console.error('Failed to initialize Appwrite:', err);
 });
 
 // Routes
-app.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth', require('./routes/authAppwrite')); // Using Appwrite auth
 app.use('/api/accounts', require('./routes/accounts'));
 app.use('/api/transactions', require('./routes/transactions'));
 app.use('/api/categories', require('./routes/categories'));
@@ -92,22 +98,31 @@ app.use((err, req, res, next) => {
 
 // Health check
 app.get('/health', (req, res) => {
-  const dbStatus = database.getConnectionStatus();
+  const appwriteStatus = appwriteService.initialized ? 'connected' : 'disconnected';
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    database: dbStatus
+    database: { 
+      status: appwriteStatus,
+      type: 'appwrite',
+      endpoint: process.env.APPWRITE_ENDPOINT 
+    }
   });
 });
 
 // Database status endpoint
 app.get('/api/status', (req, res) => {
-  const dbStatus = database.getConnectionStatus();
+  const appwriteStatus = appwriteService.initialized ? 'connected' : 'disconnected';
   res.json({
     application: 'Race-OS API',
     version: '1.0.0',
     environment: process.env.NODE_ENV || 'development',
-    database: dbStatus,
+    database: {
+      status: appwriteStatus,
+      type: 'appwrite',
+      endpoint: process.env.APPWRITE_ENDPOINT,
+      projectId: process.env.APPWRITE_PROJECT_ID
+    },
     features: {
       multiCountryTax: true,
       supportedCountries: ['US', 'IN'],

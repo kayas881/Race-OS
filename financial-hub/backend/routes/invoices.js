@@ -1,7 +1,8 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Invoice = require('../models/Invoice');
-const User = require('../models/User');
+const appwriteService = require('../config/appwrite');
+const Client = require('../models/Client');
 const auth = require('../middleware/auth');
 const PDFGenerator = require('../utils/pdfGenerator');
 const fs = require('fs').promises;

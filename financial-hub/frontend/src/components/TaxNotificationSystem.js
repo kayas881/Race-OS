@@ -32,7 +32,7 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const fetchQuarterlyDates = async () => {
     try {
-      const response = await fetch('/api/tax/quarterly-dates', {
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/tax/quarterly-dates`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       
@@ -48,7 +48,7 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const fetchTaxSettings = async () => {
     try {
-      const response = await fetch('/api/tax/settings', {
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/tax/settings`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       
@@ -63,7 +63,7 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const updateTaxSettings = async (newSettings) => {
     try {
-      const response = await fetch('/api/tax/settings', {
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/tax/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

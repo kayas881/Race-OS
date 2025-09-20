@@ -1,6 +1,6 @@
 const TaxCalculation = require('../models/TaxCalculation');
 const Transaction = require('../models/Transaction');
-const User = require('../models/User');
+const appwriteService = require('../config/appwrite');
 
 class TaxCalculationService {
   constructor() {
@@ -138,7 +138,11 @@ class TaxCalculationService {
   // Main tax calculation method
   async calculateTaxes(userId, year = new Date().getFullYear(), quarter = null) {
     try {
-      const user = await User.findById(userId);
+      const user = await appwriteService.databases.getDocument(
+        appwriteService.databaseId,
+        appwriteService.collections.users,
+        userId
+      );
       if (!user) {
         throw new Error('User not found');
       }
