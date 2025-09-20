@@ -177,4 +177,8 @@ class AppwriteConfig {
 }
 
 const appwrite = new AppwriteConfig();
+
+// Export the account instance for direct use in auth context
+export const account = appwrite.account;
+
 export default appwrite;
