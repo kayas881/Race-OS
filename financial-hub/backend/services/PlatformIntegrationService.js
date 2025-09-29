@@ -210,10 +210,14 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
       'https://www.googleapis.com/auth/yt-analytics-monetary.readonly'
     ];
 
+    // Add prompt=consent to force refresh_token issuance on repeat connects
+    // include_granted_scopes helps with incremental auth
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: scopes,
-      state: userId
+      state: userId,
+      prompt: 'consent',
+      include_granted_scopes: true
     });
 
     return authUrl;
@@ -246,30 +250,60 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
       process.env.GOOGLE_CLIENT_SECRET,
       process.env.GOOGLE_REDIRECT_URI
     );
+    let tokens;
+    try {
+      ({ tokens } = await oauth2Client.getToken(code));
+    } catch (err) {
+      if (err && err.message && err.message.includes('invalid_grant')) {
+        // Provide actionable diagnostics
+        console.error('YouTube OAuth invalid_grant: likely causes -> (1) Redirect URI mismatch, (2) Code already used/expired, (3) Clock skew, (4) Wrong client secret, (5) App not published & scopes restricted.');
+        throw new Error('YouTube authorization failed (invalid_grant). Please retry connection. If persists, verify redirect URI in Google Cloud matches GOOGLE_REDIRECT_URI and regenerate credentials.');
+      }
+      throw err;
+    }
 
-    const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
+
+    if (!tokens.refresh_token) {
+      // Frequent when user previously granted consent; warn so we can decide whether to reuse an existing one.
+      console.warn('YouTube OAuth flow returned no refresh_token. Ensure prompt=consent and access_type=offline are set, or remove prior app consent and retry.');
+    }
 
     // Get channel info
     const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
-    const channelResponse = await youtube.channels.list({
-      part: ['snippet', 'statistics'],
-      mine: true,
-    });
+    let channelResponse;
+    try {
+      channelResponse = await youtube.channels.list({
+        part: ['snippet', 'statistics'],
+        mine: true,
+      });
+    } catch (apiErr) {
+      console.error('Error calling YouTube channels.list:', apiErr.response?.data || apiErr.message);
+      throw new Error('Failed to fetch YouTube channel information');
+    }
+
+    if (!channelResponse.data || !Array.isArray(channelResponse.data.items) || channelResponse.data.items.length === 0) {
+      console.error('YouTube channel list empty. Full response:', JSON.stringify(channelResponse.data || {}, null, 2));
+      throw new Error('No YouTube channel found for this Google account');
+    }
 
     const channel = channelResponse.data.items[0];
-    
+    if (!channel || !channel.id) {
+      console.error('Channel object missing id field:', channel);
+      throw new Error('Malformed channel data returned from YouTube API');
+    }
+
     // Save integration to database
     const PlatformIntegration = require('../models/PlatformIntegration');
     const integration = new PlatformIntegration({
       user: userId,
       platform: 'youtube',
       accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
+      refreshToken: tokens.refresh_token, // may be undefined
       channelId: channel.id,
-      channelName: channel.snippet.title,
+      channelName: channel.snippet?.title || 'Unknown Channel',
       platformUserId: channel.id,
-      platformUsername: channel.snippet.title,
+      platformUsername: channel.snippet?.title || 'Unknown Channel',
       status: 'connected'
     });
 
@@ -358,7 +392,8 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
   async fetchPlatformData(platform, accessToken, startDate, endDate) {
     switch (platform.toLowerCase()) {
       case 'youtube':
-        return await this.getYouTubeRevenue(accessToken, startDate, endDate);
+        // BUGFIX: getYouTubeRevenue signature is (accessToken, refreshToken, startDate, endDate)
+        return await this.getYouTubeRevenue(accessToken, null, startDate, endDate);
       case 'twitch':
         return await this.getTwitchRevenue(accessToken, startDate, endDate);
       case 'patreon':

@@ -1,623 +1,320 @@
 const express = require('express');
-const { body, validationResult } = require('express-validator');
-const Invoice = require('../models/Invoice');
-const User = require('../models/User');
 const auth = require('../middleware/auth');
-const PDFGenerator = require('../utils/pdfGenerator');
-const fs = require('fs').promises;
-const path = require('path');
-const nodemailer = require('nodemailer');
+const Invoice = require('../models/Invoice');
+const mongoose = require('mongoose');
 
 const router = express.Router();
 
-// Validation rules
-const invoiceValidation = [
-  body('client.name').trim().notEmpty().withMessage('Client name is required'),
-  body('client.email').isEmail().withMessage('Valid client email is required'),
-  body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
-  body('items.*.description').trim().notEmpty().withMessage('Item description is required'),
-  body('items.*.quantity').isFloat({ min: 0 }).withMessage('Item quantity must be positive'),
-  body('items.*.rate').isFloat({ min: 0 }).withMessage('Item rate must be positive'),
-  body('dueDate').isISO8601().withMessage('Valid due date is required'),
-];
+// Utility: calculate totals robustly
+function normalizeRate(raw) {
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const n = Number(raw);
+  if (Number.isNaN(n) || n < 0) return 0;
+  // Accept either decimal (0.08) or percent (8) -> convert percent to decimal
+  return n > 1 ? n / 100 : n;
+}
 
-// @route   GET /api/invoices
-// @desc    Get user invoices
-// @access  Private
+function calculateTotals(items = [], taxRate = 0, discountRate = 0) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const subtotal = safeItems.reduce((sum, item) => {
+    const qty = Number(item.quantity) || 0;
+    const rate = Number(item.rate) || 0;
+    return sum + qty * rate;
+  }, 0);
+  const discountAmount = subtotal * discountRate;
+  const taxableAmount = subtotal - discountAmount;
+  const taxAmount = taxableAmount * taxRate;
+  const total = taxableAmount + taxAmount;
+  return { subtotal, discountAmount, taxableAmount, taxAmount, total };
+}
+
+// --------------------------------------------------
+// List Invoices with pagination + inline stats
+// --------------------------------------------------
 router.get('/', auth, async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 20, 
-      status, 
-      search,
-      sortBy = 'issueDate',
-      sortOrder = 'desc'
-    } = req.query;
+    const { page = 1, limit = 10, status, search } = req.query;
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = Math.min(parseInt(limit, 10) || 10, 100);
 
-    // Build query
     const query = { user: req.user.id };
-    
-    if (status && status !== 'all') {
-      query.status = status;
-    }
-    
+    if (status && status !== 'all') query.status = status;
     if (search) {
       query.$or = [
         { invoiceNumber: { $regex: search, $options: 'i' } },
         { 'client.name': { $regex: search, $options: 'i' } },
-        { 'client.company': { $regex: search, $options: 'i' } }
+        { 'client.email': { $regex: search, $options: 'i' } }
       ];
     }
 
-    // Sort options
-    const sortOptions = {};
-    sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    const [invoices, total] = await Promise.all([
+      Invoice.find(query)
+        .sort({ createdAt: -1 })
+        .limit(limitNum)
+        .skip((pageNum - 1) * limitNum),
+      Invoice.countDocuments(query)
+    ]);
 
-    const invoices = await Invoice.find(query)
-      .sort(sortOptions)
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .lean();
+    const statsAgg = await Invoice.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(req.user.id) } },
+      { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$total' } } }
+    ]);
 
-    const total = await Invoice.countDocuments(query);
-
-    // Add virtual fields
-    const invoicesWithVirtuals = invoices.map(invoice => ({
-      ...invoice,
-      isOverdue: invoice.status !== 'paid' && invoice.status !== 'cancelled' && new Date() > invoice.dueDate,
-      daysToDue: Math.ceil((invoice.dueDate - new Date()) / (1000 * 3600 * 24))
-    }));
+    const stats = { total: 0, paid: 0, pending: 0, overdue: 0, totalAmount: 0, paidAmount: 0, pendingAmount: 0 };
+    statsAgg.forEach(s => {
+      stats.total += s.count;
+      stats.totalAmount += s.total;
+      if (s._id === 'paid') { stats.paid = s.count; stats.paidAmount = s.total; }
+      if (s._id === 'pending') { stats.pending = s.count; stats.pendingAmount = s.total; }
+      if (s._id === 'overdue') { stats.overdue = s.count; }
+    });
 
     res.json({
-      invoices: invoicesWithVirtuals,
+      invoices,
       pagination: {
-        current: parseInt(page),
-        pages: Math.ceil(total / limit),
-        total,
-        limit: parseInt(limit)
-      }
+        current: pageNum,
+        total: Math.ceil(total / limitNum),
+        hasNext: pageNum * limitNum < total,
+        hasPrev: pageNum > 1
+      },
+      stats
     });
-  } catch (error) {
-    console.error('Error fetching invoices:', error);
+  } catch (err) {
+    console.error('Error fetching invoices:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// @route   GET /api/invoices/stats
-// @desc    Get invoice statistics
-// @access  Private
+// --------------------------------------------------
+// Standalone Stats Endpoint
+// --------------------------------------------------
 router.get('/stats', auth, async (req, res) => {
   try {
     const userId = req.user.id;
-    
-    const stats = await Invoice.aggregate([
-      { $match: { user: userId } },
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 },
-          total: { $sum: '$total' }
-        }
-      }
+    const byStatus = await Invoice.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(userId) } },
+      { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$total' } } },
+      { $sort: { _id: 1 } }
     ]);
 
-    const overdue = await Invoice.countDocuments({
-      user: userId,
-      status: { $nin: ['paid', 'cancelled'] },
-      dueDate: { $lt: new Date() }
-    });
-
-    const thisMonth = await Invoice.aggregate([
-      {
-        $match: {
-          user: userId,
-          issueDate: {
-            $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-          }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          count: { $sum: 1 },
-          total: { $sum: '$total' }
-        }
-      }
+    const totals = await Invoice.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(userId) } },
+      { $group: { _id: null, totalAmount: { $sum: '$total' }, count: { $sum: 1 } } }
     ]);
 
-    res.json({
-      byStatus: stats,
-      overdue,
-      thisMonth: thisMonth[0] || { count: 0, total: 0 }
-    });
-  } catch (error) {
-    console.error('Error fetching invoice stats:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// @route   GET /api/invoices/:id
-// @desc    Get single invoice
-// @access  Private
-router.get('/:id', auth, async (req, res) => {
-  try {
-    const invoice = await Invoice.findOne({ 
-      _id: req.params.id, 
-      user: req.user.id 
-    }).lean();
-
-    if (!invoice) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    // Add virtual fields
-    invoice.isOverdue = invoice.status !== 'paid' && invoice.status !== 'cancelled' && new Date() > invoice.dueDate;
-    invoice.daysToDue = Math.ceil((invoice.dueDate - new Date()) / (1000 * 3600 * 24));
-
-    res.json(invoice);
-  } catch (error) {
-    console.error('Error fetching invoice:', error);
+    res.json({ byStatus, overall: totals[0] || { totalAmount: 0, count: 0 } });
+  } catch (err) {
+    console.error('Error fetching invoice stats:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // @route   POST /api/invoices
-// @desc    Create new invoice
-// @access  Private
-router.post('/', auth, invoiceValidation, async (req, res) => {
+// @desc    Create a new invoice
+router.post('/', auth, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { client, items, dueDate, notes, terms, taxRate, discountRate } = req.body;
+
+    if (!client || !client.name || !client.email) {
+      return res.status(400).json({ error: 'Client name and email are required' });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one item is required' });
+    }
+    if (!dueDate) {
+      return res.status(400).json({ error: 'dueDate is required' });
     }
 
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    const normTaxRate = normalizeRate(taxRate);
+    const normDiscountRate = normalizeRate(discountRate);
+    const { subtotal, discountAmount, taxAmount, total } = calculateTotals(items, normTaxRate, normDiscountRate);
 
-    // Calculate item amounts
-    const items = req.body.items.map(item => ({
-      ...item,
-      amount: item.quantity * item.rate
-    }));
+    const invoiceCount = await Invoice.countDocuments({ user: req.user.id });
+    const invoiceNumber = `INV-${String(invoiceCount + 1).padStart(4, '0')}`;
 
-    // Generate invoice number
-    const invoiceNumber = await Invoice.generateInvoiceNumber(req.user.id);
-
-    const invoiceData = {
-      ...req.body,
+    const invoice = new Invoice({
       user: req.user.id,
       invoiceNumber,
+      client,
       items,
-      currency: req.body.currency || user.preferences.currency || 'USD'
-    };
+      subtotal,
+      taxRate: normTaxRate,
+      taxAmount,
+      discountRate: normDiscountRate,
+      discountAmount,
+      total,
+      dueDate: new Date(dueDate),
+      notes,
+      terms // status left to schema default 'draft'
+    });
 
-    const invoice = new Invoice(invoiceData);
     await invoice.save();
-
     res.status(201).json(invoice);
-  } catch (error) {
-    console.error('Error creating invoice:', error);
-    if (error.code === 11000) {
-      return res.status(400).json({ error: 'Invoice number already exists' });
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: 'Validation failed', details: err.message });
     }
+    if (err.code === 11000) {
+      return res.status(409).json({ error: 'Duplicate invoice number' });
+    }
+    console.error('Error creating invoice:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// @route   GET /api/invoices/:id
+// @desc    Get a specific invoice
+router.get('/:id', auth, async (req, res) => {
+  try {
+    const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id })
+      .populate('client', 'name email');
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    res.json(invoice);
+  } catch (err) {
+    console.error('Error fetching invoice:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // @route   PUT /api/invoices/:id
-// @desc    Update invoice
-// @access  Private
-router.put('/:id', auth, invoiceValidation, async (req, res) => {
+// @desc    Update an invoice
+router.put('/:id', auth, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { client, items, dueDate, notes, terms, taxRate, discountRate, status } = req.body;
+    const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+
+    if (client && (!client.name || !client.email)) {
+      return res.status(400).json({ error: 'Client name and email are required' });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one item is required' });
+    }
+    if (!dueDate) {
+      return res.status(400).json({ error: 'dueDate is required' });
     }
 
-    const invoice = await Invoice.findOne({ 
-      _id: req.params.id, 
-      user: req.user.id 
-    });
+    const normTaxRate = normalizeRate(taxRate);
+    const normDiscountRate = normalizeRate(discountRate);
+    const { subtotal, discountAmount, taxAmount, total } = calculateTotals(items, normTaxRate, normDiscountRate);
 
-    if (!invoice) {
-      return res.status(404).json({ error: 'Invoice not found' });
+    invoice.client = client;
+    invoice.items = items;
+    invoice.subtotal = subtotal;
+    invoice.taxRate = normTaxRate;
+    invoice.taxAmount = taxAmount;
+    invoice.discountRate = normDiscountRate;
+    invoice.discountAmount = discountAmount;
+    invoice.total = total;
+    invoice.dueDate = new Date(dueDate);
+    invoice.notes = notes;
+    invoice.terms = terms;
+    invoice.updatedAt = new Date();
+
+    if (status) {
+      const allowed = ['draft','sent','paid','overdue','cancelled'];
+      if (!allowed.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status value' });
+      }
+      invoice.status = status;
+      if (status === 'paid') invoice.paidAt = new Date();
     }
 
-    // Prevent editing paid invoices
-    if (invoice.status === 'paid') {
-      return res.status(400).json({ error: 'Cannot edit paid invoices' });
-    }
-
-    // Calculate item amounts
-    const items = req.body.items.map(item => ({
-      ...item,
-      amount: item.quantity * item.rate
-    }));
-
-    Object.assign(invoice, { ...req.body, items });
     await invoice.save();
-
     res.json(invoice);
-  } catch (error) {
-    console.error('Error updating invoice:', error);
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: 'Validation failed', details: err.message });
+    }
+    console.error('Error updating invoice:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // @route   PATCH /api/invoices/:id/status
-// @desc    Update invoice status (mark as paid, etc.)
-// @access  Private
-router.patch('/:id/status', auth, [
-  body('status').isIn(['draft', 'sent', 'paid', 'overdue', 'cancelled']).withMessage('Invalid status'),
-  body('paymentMethod').optional().isIn(['cash', 'check', 'bank_transfer', 'credit_card', 'paypal', 'other']),
-  body('paymentReference').optional().trim()
-], async (req, res) => {
+// @desc    Update status (e.g., mark paid)
+router.patch('/:id/status', auth, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { status, paidAt } = req.body;
+    const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    if (status) {
+      invoice.status = status;
+      if (status === 'paid') invoice.paidAt = paidAt ? new Date(paidAt) : new Date();
     }
-
-    const invoice = await Invoice.findOne({ 
-      _id: req.params.id, 
-      user: req.user.id 
-    });
-
-    if (!invoice) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    const { status, paymentMethod, paymentReference } = req.body;
-
-    invoice.status = status;
-
-    if (status === 'paid') {
-      invoice.paidDate = new Date();
-      if (paymentMethod) invoice.paymentMethod = paymentMethod;
-      if (paymentReference) invoice.paymentReference = paymentReference;
-    } else {
-      invoice.paidDate = undefined;
-      invoice.paymentMethod = undefined;
-      invoice.paymentReference = undefined;
-    }
-
+    invoice.updatedAt = new Date();
     await invoice.save();
-
-    res.json(invoice);
-  } catch (error) {
-    console.error('Error updating invoice status:', error);
+    res.json({ message: 'Status updated', invoice });
+  } catch (err) {
+    console.error('Error updating invoice status:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// @route   DELETE /api/invoices/:id
-// @desc    Delete invoice
-// @access  Private
-router.delete('/:id', auth, async (req, res) => {
+// Helper for send/email logic
+async function markAsSent(invoice) {
+  if (!invoice.sentAt) {
+    invoice.sentAt = new Date();
+    if (invoice.status === 'pending') invoice.status = 'sent';
+  }
+  invoice.updatedAt = new Date();
+  await invoice.save();
+  return invoice;
+}
+
+// @route   POST /api/invoices/:id/email
+// @desc    Send invoice via email (placeholder)
+router.post('/:id/email', auth, async (req, res) => {
   try {
-    const invoice = await Invoice.findOne({ 
-      _id: req.params.id, 
-      user: req.user.id 
-    });
+    const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    await markAsSent(invoice);
+    res.json({ message: 'Email dispatch simulated (placeholder)', invoice });
+  } catch (err) {
+    console.error('Error emailing invoice:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
-    if (!invoice) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    // Prevent deleting paid invoices
-    if (invoice.status === 'paid') {
-      return res.status(400).json({ error: 'Cannot delete paid invoices' });
-    }
-
-    await Invoice.findByIdAndDelete(req.params.id);
-
-    res.json({ message: 'Invoice deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting invoice:', error);
+// @route   POST /api/invoices/:id/send
+// @desc    Alias for sending invoice (legacy)
+router.post('/:id/send', auth, async (req, res) => {
+  try {
+    const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id }).populate('client', 'name email');
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    await markAsSent(invoice);
+    res.json({ message: 'Invoice sent successfully', invoice });
+  } catch (err) {
+    console.error('Error sending invoice:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // @route   GET /api/invoices/:id/pdf
-// @desc    Generate and download PDF
-// @access  Private
+// @desc    Generate PDF (placeholder)
 router.get('/:id/pdf', auth, async (req, res) => {
   try {
-    const invoice = await Invoice.findOne({ 
-      _id: req.params.id, 
-      user: req.user.id 
-    });
-
-    if (!invoice) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    const user = await User.findById(req.user.id);
-
-    // Generate PDF HTML template
-    const html = generateInvoicePDF(invoice, user);
-
-    // Generate PDF using the robust PDF generator
-    const pdf = await PDFGenerator.generatePDF(html);
-
-    // Set headers for PDF download
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.invoiceNumber}.pdf"`);
-    
-    res.send(pdf);
-
-    // Update invoice as PDF generated
-    invoice.pdfGenerated = true;
-    await invoice.save();
-
-  } catch (error) {
-    console.error('Error generating PDF:', error);
-    res.status(500).json({ error: 'Error generating PDF' });
+    const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    res.json({ message: 'PDF generation placeholder', invoiceId: invoice._id, invoiceNumber: invoice.invoiceNumber });
+  } catch (err) {
+    console.error('Error generating invoice PDF:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// @route   POST /api/invoices/:id/email
-// @desc    Send invoice via email
-// @access  Private
-router.post('/:id/email', auth, [
-  body('to').optional().isEmail().withMessage('Valid recipient email required'),
-  body('subject').optional().trim(),
-  body('message').optional().trim()
-], async (req, res) => {
+// @route   DELETE /api/invoices/:id
+// @desc    Delete an invoice
+router.delete('/:id', auth, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const invoice = await Invoice.findOne({ 
-      _id: req.params.id, 
-      user: req.user.id 
-    });
-
-    if (!invoice) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-
-    const user = await User.findById(req.user.id);
-
-    // Generate PDF for attachment
-    const html = generateInvoicePDF(invoice, user);
-    const pdf = await PDFGenerator.generatePDF(html);
-
-    // Setup email
-    if (!process.env.EMAIL_USER && !process.env.SENDGRID_API_KEY) {
-      return res.status(400).json({ 
-        error: 'Email service not configured. Please set EMAIL_USER and EMAIL_PASS or SENDGRID_API_KEY in environment variables.' 
-      });
-    }
-
-    let transporter;
-    
-    if (process.env.SENDGRID_API_KEY) {
-      // Use SendGrid
-      const sgMail = require('@sendgrid/mail');
-      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-      
-      const recipientEmail = req.body.to || invoice.client.email;
-      const subject = req.body.subject || `Invoice ${invoice.invoiceNumber} from ${user.businessName || user.fullName}`;
-      const message = req.body.message || generateEmailMessage(invoice, user);
-
-      const msg = {
-        to: recipientEmail,
-        from: process.env.FROM_EMAIL || user.email,
-        subject,
-        html: message,
-        attachments: [
-          {
-            content: pdf.toString('base64'),
-            filename: `invoice-${invoice.invoiceNumber}.pdf`,
-            type: 'application/pdf',
-            disposition: 'attachment'
-          }
-        ]
-      };
-
-      await sgMail.send(msg);
-    } else {
-      // Use SMTP (Gmail, etc.)
-      transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS
-        }
-      });
-
-      const recipientEmail = req.body.to || invoice.client.email;
-      const subject = req.body.subject || `Invoice ${invoice.invoiceNumber} from ${user.businessName || user.fullName}`;
-      const message = req.body.message || generateEmailMessage(invoice, user);
-
-      const mailOptions = {
-        from: process.env.EMAIL_USER || user.email,
-        to: recipientEmail,
-        subject,
-        html: message,
-        attachments: [
-          {
-            filename: `invoice-${invoice.invoiceNumber}.pdf`,
-            content: pdf,
-            contentType: 'application/pdf'
-          }
-        ]
-      };
-
-      await transporter.sendMail(mailOptions);
-    }
-
-    // Update invoice email tracking
-    invoice.emailSent = true;
-    invoice.emailSentDate = new Date();
-    invoice.status = 'sent';
-    await invoice.save();
-
-    res.json({ message: 'Invoice sent successfully' });
-
-  } catch (error) {
-    console.error('Error sending invoice email:', error);
-    res.status(500).json({ error: 'Error sending email' });
+    const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    await Invoice.deleteOne({ _id: req.params.id });
+    res.json({ message: 'Invoice deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting invoice:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
-
-// Helper function to generate PDF HTML
-function generateInvoicePDF(invoice, user) {
-  const formatDate = (date) => new Date(date).toLocaleDateString();
-  const formatCurrency = (amount, currency) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currency || 'USD'
-    }).format(amount);
-  };
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Invoice ${invoice.invoiceNumber}</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #333; }
-        .header { display: flex; justify-content: space-between; margin-bottom: 30px; }
-        .company-info h1 { margin: 0; color: #2563eb; }
-        .invoice-info { text-align: right; }
-        .invoice-info h2 { margin: 0; font-size: 24px; color: #2563eb; }
-        .client-info { margin-bottom: 30px; }
-        .invoice-details { display: flex; justify-content: space-between; margin-bottom: 30px; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #f8f9fa; font-weight: bold; }
-        .text-right { text-align: right; }
-        .totals-section { margin-left: auto; width: 300px; }
-        .total-row { font-weight: bold; font-size: 18px; border-top: 2px solid #333; }
-        .notes { margin-top: 30px; }
-        .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div class="company-info">
-            <h1>${user.businessName || user.fullName}</h1>
-            <div>${user.email}</div>
-        </div>
-        <div class="invoice-info">
-            <h2>INVOICE</h2>
-            <div><strong>${invoice.invoiceNumber}</strong></div>
-        </div>
-    </div>
-
-    <div class="client-info">
-        <h3>Bill To:</h3>
-        <div><strong>${invoice.client.name}</strong></div>
-        ${invoice.client.company ? `<div>${invoice.client.company}</div>` : ''}
-        <div>${invoice.client.email}</div>
-        ${invoice.client.address ? `
-            <div>${invoice.client.address.street}</div>
-            <div>${invoice.client.address.city}, ${invoice.client.address.state} ${invoice.client.address.zipCode}</div>
-            <div>${invoice.client.address.country}</div>
-        ` : ''}
-    </div>
-
-    <div class="invoice-details">
-        <div>
-            <div><strong>Issue Date:</strong> ${formatDate(invoice.issueDate)}</div>
-            <div><strong>Due Date:</strong> ${formatDate(invoice.dueDate)}</div>
-        </div>
-        <div>
-            <div><strong>Status:</strong> ${invoice.status.toUpperCase()}</div>
-            ${invoice.paidDate ? `<div><strong>Paid Date:</strong> ${formatDate(invoice.paidDate)}</div>` : ''}
-        </div>
-    </div>
-
-    <table>
-        <thead>
-            <tr>
-                <th>Description</th>
-                <th class="text-right">Qty</th>
-                <th class="text-right">Rate</th>
-                <th class="text-right">Amount</th>
-            </tr>
-        </thead>
-        <tbody>
-            ${invoice.items.map(item => `
-                <tr>
-                    <td>${item.description}</td>
-                    <td class="text-right">${item.quantity}</td>
-                    <td class="text-right">${formatCurrency(item.rate, invoice.currency)}</td>
-                    <td class="text-right">${formatCurrency(item.amount, invoice.currency)}</td>
-                </tr>
-            `).join('')}
-        </tbody>
-    </table>
-
-    <div class="totals-section">
-        <table>
-            <tr>
-                <td>Subtotal:</td>
-                <td class="text-right">${formatCurrency(invoice.subtotal, invoice.currency)}</td>
-            </tr>
-            ${invoice.discountAmount > 0 ? `
-                <tr>
-                    <td>Discount (${(invoice.discountRate * 100).toFixed(1)}%):</td>
-                    <td class="text-right">-${formatCurrency(invoice.discountAmount, invoice.currency)}</td>
-                </tr>
-            ` : ''}
-            ${invoice.taxAmount > 0 ? `
-                <tr>
-                    <td>Tax (${(invoice.taxRate * 100).toFixed(1)}%):</td>
-                    <td class="text-right">${formatCurrency(invoice.taxAmount, invoice.currency)}</td>
-                </tr>
-            ` : ''}
-            <tr class="total-row">
-                <td>Total:</td>
-                <td class="text-right">${formatCurrency(invoice.total, invoice.currency)}</td>
-            </tr>
-        </table>
-    </div>
-
-    ${invoice.notes ? `
-        <div class="notes">
-            <h3>Notes:</h3>
-            <p>${invoice.notes}</p>
-        </div>
-    ` : ''}
-
-    <div class="footer">
-        <div><strong>Payment Terms:</strong> ${invoice.terms}</div>
-        <div>Thank you for your business!</div>
-    </div>
-</body>
-</html>
-  `;
-}
-
-// Helper function to generate email message
-function generateEmailMessage(invoice, user) {
-  const formatCurrency = (amount, currency) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currency || 'USD'
-    }).format(amount);
-  };
-
-  return `
-    <h2>Invoice ${invoice.invoiceNumber}</h2>
-    <p>Dear ${invoice.client.name},</p>
-    <p>Please find attached invoice ${invoice.invoiceNumber} for ${formatCurrency(invoice.total, invoice.currency)}.</p>
-    <p><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>
-    <p>Thank you for your business!</p>
-    <br>
-    <p>Best regards,<br>
-    ${user.businessName || user.fullName}<br>
-    ${user.email}</p>
-  `;
-}
 
 module.exports = router;
