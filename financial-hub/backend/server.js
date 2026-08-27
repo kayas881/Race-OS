@@ -16,12 +16,17 @@ if (process.env.NODE_ENV === 'development' || process.env.CODESPACES || process.
   app.set('trust proxy', 1);
 }
 
-// CORS Configuration for Codespaces
+// CORS Configuration
 const corsOptions = {
   origin: [
     'http://localhost:3000',
-    'http://localhost:3001', 
+    'http://localhost:3001',
     'https://humble-space-waddle-q7qrj65r6p6h4qpg-3000.app.github.dev',
+    'https://raceos.me',
+    'https://www.raceos.me',
+    // Vercel keeps the *.vercel.app URL live alongside a custom domain, so keep
+    // accepting it too rather than making it a hard cutover.
+    'https://race-os-web.vercel.app',
     process.env.FRONTEND_URL
   ].filter(Boolean), // Remove any undefined values
   credentials: true,
