@@ -214,10 +214,17 @@ brandingSchema.pre('save', function(next) {
   next();
 });
 
-// Virtual for logo URL with fallback
+// Virtual for logo URL with fallback. Logo files are stored under a relative
+// path (e.g. /uploads/logos/...) served by this backend, but emails and PDFs
+// have no page origin to resolve a relative URL against, so this must return
+// an absolute URL.
 brandingSchema.virtual('logoUrl').get(function() {
   if (this.logo && this.logo.url) {
-    return this.logo.url;
+    if (/^https?:\/\//i.test(this.logo.url)) {
+      return this.logo.url;
+    }
+    const base = (process.env.BACKEND_URL || 'https://api.raceos.me').replace(/\/$/, '');
+    return `${base}${this.logo.url}`;
   }
   return null;
 });

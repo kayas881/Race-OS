@@ -21,8 +21,24 @@ class PDFGenerator {
       .join(', ');
   }
 
-  static async generateInvoicePDF(invoice) {
+  static formatBrandAddress(address) {
+    if (!address) return '';
+    return [address.street, address.city, address.state, address.zipCode, address.country]
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  static async generateInvoicePDF(invoice, branding = null) {
     const clientAddress = this.formatClientAddress(invoice.client.address);
+
+    const companyName = (branding && branding.companyName) || 'Your Business Name';
+    const primaryColor = (branding && branding.colors && branding.colors.primary) || '#3b82f6';
+    const contact = (branding && branding.contact) || {};
+    const brandAddress = this.formatBrandAddress(contact.address);
+    const showLogo = !branding || branding.showLogo !== false;
+    const logoUrl = branding && branding.logo;
+    const footerText = (branding && branding.invoice && branding.invoice.footer) || 'Thank you for your business!';
+
     const htmlContent = `
       <!DOCTYPE html>
       <html>
@@ -43,13 +59,17 @@ class PDFGenerator {
             justify-content: space-between;
             align-items: start;
             margin-bottom: 40px;
-            border-bottom: 3px solid #3b82f6;
+            border-bottom: 3px solid ${primaryColor};
             padding-bottom: 20px;
           }
           .company-info h1 {
-            color: #3b82f6;
+            color: ${primaryColor};
             margin: 0;
             font-size: 28px;
+          }
+          .company-logo {
+            max-height: 60px;
+            margin-bottom: 10px;
           }
           .invoice-details {
             text-align: right;
@@ -57,7 +77,7 @@ class PDFGenerator {
           .invoice-number {
             font-size: 24px;
             font-weight: bold;
-            color: #3b82f6;
+            color: ${primaryColor};
             margin: 0;
           }
           .billing-section {
@@ -111,10 +131,10 @@ class PDFGenerator {
             border-bottom: 1px solid #eee;
           }
           .total-row.final {
-            border-bottom: 3px solid #3b82f6;
+            border-bottom: 3px solid ${primaryColor};
             font-weight: bold;
             font-size: 18px;
-            color: #3b82f6;
+            color: ${primaryColor};
           }
           .payment-info {
             margin-top: 40px;
@@ -133,11 +153,11 @@ class PDFGenerator {
       <body>
         <div class="header">
           <div class="company-info">
-            <h1>Your Business Name</h1>
-            <p>Your Address<br>
-            City, State ZIP<br>
-            Email: your@email.com<br>
-            Phone: (555) 123-4567</p>
+            ${showLogo && logoUrl ? `<img src="${logoUrl}" alt="${companyName}" class="company-logo"><br>` : ''}
+            <h1>${companyName}</h1>
+            <p>${brandAddress ? brandAddress + '<br>' : ''}
+            ${contact.email ? `Email: ${contact.email}<br>` : ''}
+            ${contact.phone ? `Phone: ${contact.phone}` : ''}</p>
           </div>
           <div class="invoice-details">
             <div class="invoice-number">INVOICE</div>
@@ -222,7 +242,7 @@ class PDFGenerator {
         <div class="payment-info">
           <div class="section-title">Payment Information:</div>
           <p>${invoice.terms || 'Payment due within 30 days of invoice date.'}</p>
-          <p>Thank you for your business!</p>
+          <p>${footerText}</p>
         </div>
 
         <div class="footer">

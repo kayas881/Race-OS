@@ -86,7 +86,7 @@ const BrandingSettings = () => {
         const data = await response.json();
         setBranding(data);
         if (data.logo && data.logo.url) {
-          setLogoPreview(data.logo.url);
+          setLogoPreview(/^https?:\/\//i.test(data.logo.url) ? data.logo.url : getApiUrl(data.logo.url));
         }
       }
     } catch (error) {
@@ -150,7 +150,7 @@ const BrandingSettings = () => {
 
       if (response.ok) {
         const data = await response.json();
-        setLogoPreview(data.logo.url);
+        setLogoPreview(/^https?:\/\//i.test(data.logo.url) ? data.logo.url : getApiUrl(data.logo.url));
         setLogoFile(null);
         setMessage({ type: 'success', text: 'Logo uploaded successfully!' });
         setTimeout(() => setMessage({ type: '', text: '' }), 3000);

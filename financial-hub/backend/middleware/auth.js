@@ -56,7 +56,7 @@ module.exports = async function (req, res, next) {
       }
     }
 
-    req.user = { id: user._id.toString() };
+    req.user = { id: user._id.toString(), email: user.email };
     next();
   } catch (err) {
     console.error('Auth middleware error:', err.message);

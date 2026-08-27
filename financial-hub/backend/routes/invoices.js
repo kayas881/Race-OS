@@ -274,7 +274,7 @@ router.post('/:id/email', auth, async (req, res) => {
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
 
     const branding = await Branding.getOrCreateForUser(req.user.id);
-    const pdfBuffer = await PDFGenerator.generateInvoicePDF(invoice);
+    const pdfBuffer = await PDFGenerator.generateInvoicePDF(invoice, branding.getInvoiceBranding());
 
     const result = await emailService.sendInvoiceEmail(
       invoice,
@@ -316,7 +316,8 @@ router.get('/:id/pdf', auth, async (req, res) => {
     const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
 
-    const pdfBuffer = await PDFGenerator.generateInvoicePDF(invoice);
+    const branding = await Branding.getOrCreateForUser(req.user.id);
+    const pdfBuffer = await PDFGenerator.generateInvoicePDF(invoice, branding.getInvoiceBranding());
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.invoiceNumber}.pdf"`);
