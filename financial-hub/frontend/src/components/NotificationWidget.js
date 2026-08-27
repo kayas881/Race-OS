@@ -8,6 +8,7 @@ import {
   ClockIcon,
   EyeIcon
 } from '@heroicons/react/24/outline';
+import { apiFetch } from '../utils/api';
 
 const NotificationWidget = () => {
   const [notifications, setNotifications] = useState([]);
@@ -19,11 +20,7 @@ const NotificationWidget = () => {
 
   const fetchNotifications = async () => {
     try {
-      const response = await fetch('/api/notifications/recent', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch('api/notifications/recent');
 
       if (response.ok) {
         const data = await response.json();
@@ -38,12 +35,7 @@ const NotificationWidget = () => {
 
   const sendTestEmail = async () => {
     try {
-      const response = await fetch('/api/notifications/test/weekly-summary', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch('api/notifications/test/weekly-summary', { method: 'POST' });
 
       if (response.ok) {
         const data = await response.json();

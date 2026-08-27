@@ -11,14 +11,41 @@ class EmailService {
   async initializeTransporter() {
     // Create transporter based on environment
     if (process.env.NODE_ENV === 'production') {
-      // Production email service (e.g., SendGrid, Mailgun, etc.)
-      this.transporter = nodemailer.createTransporter({
-        service: process.env.EMAIL_SERVICE || 'gmail',
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS
-        }
-      });
+      // EMAIL_SERVICE picks the provider explicitly, so a configured fallback
+      // (e.g. gmail) isn't silently overridden just because a SendGrid key exists.
+      const provider = (process.env.EMAIL_SERVICE || 'resend').toLowerCase();
+
+      if (provider === 'sendgrid' && process.env.SENDGRID_API_KEY) {
+        // SendGrid via SMTP relay - 'apikey' is the literal username SendGrid expects
+        this.transporter = nodemailer.createTransport({
+          host: 'smtp.sendgrid.net',
+          port: 587,
+          secure: false,
+          auth: {
+            user: 'apikey',
+            pass: process.env.SENDGRID_API_KEY
+          }
+        });
+      } else if (provider === 'resend' && process.env.RESEND_API_KEY) {
+        // Resend via SMTP relay - 'resend' is the literal username Resend expects
+        this.transporter = nodemailer.createTransport({
+          host: 'smtp.resend.com',
+          port: 587,
+          secure: false,
+          auth: {
+            user: 'resend',
+            pass: process.env.RESEND_API_KEY
+          }
+        });
+      } else {
+        this.transporter = nodemailer.createTransport({
+          service: provider,
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS
+          }
+        });
+      }
     } else {
       // Development: Use Ethereal Email for testing
       try {
@@ -69,6 +96,8 @@ class EmailService {
     `;
 
     switch (type) {
+      case 'invoice':
+        return this.generateInvoiceTemplate(data, brand, baseStyles);
       case 'invoice-reminder':
         return this.generateInvoiceReminderTemplate(data, brand, baseStyles);
       case 'overdue-invoice':
@@ -77,9 +106,99 @@ class EmailService {
         return this.generateWeeklySummaryTemplate(data, brand, baseStyles);
       case 'payment-confirmation':
         return this.generatePaymentConfirmationTemplate(data, brand, baseStyles);
+      case 'password-reset':
+        return this.generatePasswordResetTemplate(data, brand, baseStyles);
       default:
         throw new Error(`Unknown email template type: ${type}`);
     }
+  }
+
+  generateInvoiceTemplate(data, brand, styles) {
+    const { invoice, client } = data;
+
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Invoice ${invoice.invoiceNumber}</title>
+        ${styles}
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            ${brand.logo ? `<img src="${brand.logo}" alt="${brand.companyName}" class="logo">` : ''}
+            <h1>${brand.companyName}</h1>
+          </div>
+
+          <div class="content">
+            <h2>New Invoice</h2>
+            <p>Dear ${client.name},</p>
+
+            <p>Please find attached invoice ${invoice.invoiceNumber} for your recent work with ${brand.companyName}.</p>
+
+            <div style="background: #f0f9ff; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <h3>Invoice Details</h3>
+              <p><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</p>
+              <p><strong>Issue Date:</strong> ${new Date(invoice.issueDate).toLocaleDateString()}</p>
+              <p><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>
+              <p><strong>Amount Due:</strong> <span class="amount">$${invoice.total.toLocaleString()}</span></p>
+            </div>
+
+            <p>The invoice is attached to this email as a PDF for your records.</p>
+
+            <p>If you have any questions, please don't hesitate to reach out.</p>
+
+            <p>Thank you for your business!</p>
+          </div>
+
+          <div class="footer">
+            <p>${brand.companyName}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  }
+
+  generatePasswordResetTemplate(data, brand, styles) {
+    const { firstName, resetUrl } = data;
+
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Reset your password</title>
+        ${styles}
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            ${brand.logo ? `<img src="${brand.logo}" alt="${brand.companyName}" class="logo">` : ''}
+            <h1>${brand.companyName}</h1>
+          </div>
+
+          <div class="content">
+            <h2>Reset your password</h2>
+            <p>Hi ${firstName},</p>
+
+            <p>We received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.</p>
+
+            <a href="${resetUrl}" class="button">Reset Password</a>
+
+            <p>If you didn't request this, you can safely ignore this email — your password won't change.</p>
+          </div>
+
+          <div class="footer">
+            <p>${brand.companyName}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
   }
 
   generateInvoiceReminderTemplate(data, brand, styles) {
@@ -356,6 +475,39 @@ class EmailService {
         error: error.message
       };
     }
+  }
+
+  // Send a newly-created invoice to the client, with the PDF attached
+  async sendInvoiceEmail(invoice, client, branding = null, pdfBuffer = null) {
+    const htmlContent = this.generateEmailTemplate('invoice', {
+      invoice,
+      client
+    }, branding);
+
+    const attachments = pdfBuffer
+      ? [{ filename: `invoice-${invoice.invoiceNumber}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+      : [];
+
+    return await this.sendEmail(
+      client.email,
+      `Invoice ${invoice.invoiceNumber} from ${(branding && branding.companyName) || 'Race-OS'}`,
+      htmlContent,
+      attachments
+    );
+  }
+
+  // Send password reset link
+  async sendPasswordReset(user, resetUrl, branding = null) {
+    const htmlContent = this.generateEmailTemplate('password-reset', {
+      firstName: user.firstName,
+      resetUrl
+    }, branding);
+
+    return await this.sendEmail(
+      user.email,
+      `Reset your password - ${(branding && branding.companyName) || 'Race-OS'}`,
+      htmlContent
+    );
   }
 
   // Send invoice reminder

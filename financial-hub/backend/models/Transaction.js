@@ -93,6 +93,18 @@ const TransactionSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Set for transactions imported from a bank statement CSV (services/csvImportService.js)
+  source: {
+    type: String,
+    enum: ['csv_import']
+  },
+  balance: Number,
+  reference: String,
+  metadata: {
+    bankName: String,
+    importDate: Date,
+    originalDescription: String
+  },
   isReviewed: {
     type: Boolean,
     default: false

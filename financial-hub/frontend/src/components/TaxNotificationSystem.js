@@ -8,6 +8,7 @@ import {
   XMarkIcon,
   Cog6ToothIcon
 } from '@heroicons/react/24/outline';
+import { apiFetch } from '../utils/api';
 
 const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
   const [notifications, setNotifications] = useState([]);
@@ -32,10 +33,8 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const fetchQuarterlyDates = async () => {
     try {
-      const response = await fetch('/api/tax/quarterly-dates', {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
+      const response = await apiFetch('api/tax/quarterly-dates');
+
       if (response.ok) {
         const data = await response.json();
         setQuarterlyDates(data.upcomingDates);
@@ -48,10 +47,8 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const fetchTaxSettings = async () => {
     try {
-      const response = await fetch('/api/tax/settings', {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
+      const response = await apiFetch('api/tax/settings');
+
       if (response.ok) {
         const data = await response.json();
         setTaxSettings(data);
@@ -63,12 +60,8 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
 
   const updateTaxSettings = async (newSettings) => {
     try {
-      const response = await fetch('/api/tax/settings', {
+      const response = await apiFetch('api/tax/settings', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify(newSettings)
       });
       
@@ -111,12 +104,8 @@ const TaxNotificationSystem = forwardRef(({ userId }, ref) => {
   // Function to be called when new income is received
   const showIncomeSetAsideNotification = async (amount) => {
     try {
-      const response = await fetch('/api/tax/calculate-set-aside', {
+      const response = await apiFetch('api/tax/calculate-set-aside', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({ amount })
       });
       

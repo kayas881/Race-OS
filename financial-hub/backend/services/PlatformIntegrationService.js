@@ -130,6 +130,9 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
 
       return {
         platform: 'twitch',
+        // PlatformIntegration.revenueData requires a date - this is a snapshot as of
+        // the sync, not a historical figure (see isEstimate/message below).
+        date: new Date().toISOString().split('T')[0],
         channelName: user.display_name,
         channelId: user.id,
         totalRevenue: estimatedSubRevenue + estimatedBitsRevenue,
@@ -138,6 +141,10 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
         totalSubscribers: totalSubs,
         totalBits: bitsTotal,
         followerCount: parseInt(user.view_count), // Twitch doesn't provide follower count in user endpoint
+        // Twitch has no public revenue/payout API - this is a rough guess from current
+        // subscriber/bits counts, not a real historical figure. Never treat as tax-relevant income.
+        isEstimate: true,
+        message: 'Estimated from current subscriber count and bits, not real payout data - Twitch does not provide a revenue API. Check your Twitch Creator Dashboard for actual payout figures.'
       };
     } catch (error) {
       console.error('Error fetching Twitch revenue:', error);
@@ -155,7 +162,9 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
         },
         params: {
           include: 'creator,benefits,goals',
-          'fields[campaign]': 'creation_name,patron_count,pledge_sum,published_at',
+          // v1's 'pledge_sum' field doesn't exist in v2 at all - v2 has no campaign-level
+          // total, so lifetime totals must be derived from summing per-member data below.
+          'fields[campaign]': 'creation_name,patron_count,published_at',
           'fields[user]': 'full_name,url',
         },
       });
@@ -163,32 +172,42 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
       const campaign = campaignResponse.data.data[0];
       const creator = campaignResponse.data.included?.find(item => item.type === 'user');
 
-      // Get pledges
-      const pledgesResponse = await axios.get(`https://www.patreon.com/api/oauth2/v2/campaigns/${campaign.id}/pledges`, {
+      // v2 has no "pledges" endpoint at all - that was v1. v2 replaced it with "members",
+      // using patron_status/currently_entitled_amount_cents instead of declined_since/amount_cents.
+      const membersResponse = await axios.get(`https://www.patreon.com/api/oauth2/v2/campaigns/${campaign.id}/members`, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
         },
         params: {
-          include: 'patron,reward',
-          'fields[pledge]': 'amount_cents,created_at,declined_since',
+          // currently_entitled_amount_cents is the current tier price (next-charge estimate);
+          // campaign_lifetime_support_cents is what they've actually paid historically -
+          // the closer of the two to "real money received" (lifetime_support_cents is deprecated).
+          'fields[member]': 'patron_status,currently_entitled_amount_cents,campaign_lifetime_support_cents,last_charge_date,last_charge_status',
         },
       });
 
-      const pledges = pledgesResponse.data.data || [];
-      const activePledges = pledges.filter(pledge => !pledge.attributes.declined_since);
-      
-      const totalRevenue = activePledges.reduce((sum, pledge) => sum + pledge.attributes.amount_cents, 0) / 100;
+      const members = membersResponse.data.data || [];
+      const activePledges = members.filter(member => member.attributes.patron_status === 'active_patron');
+
+      const totalRevenue = activePledges.reduce((sum, member) => sum + (member.attributes.currently_entitled_amount_cents || 0), 0) / 100;
+      const lifetimeRevenue = members.reduce((sum, member) => sum + (member.attributes.campaign_lifetime_support_cents || 0), 0) / 100;
 
       return {
         platform: 'patreon',
+        date: new Date().toISOString().split('T')[0],
         campaignName: campaign.attributes.creation_name,
         campaignId: campaign.id,
         creatorName: creator?.attributes.full_name,
         totalRevenue,
+        lifetimeRevenue,
         patronCount: campaign.attributes.patron_count,
-        pledgeSum: campaign.attributes.pledge_sum / 100,
         activePledges: activePledges.length,
         averagePledge: activePledges.length > 0 ? totalRevenue / activePledges.length : 0,
+        // Pledges are ongoing monthly commitments, not discrete payment events, and this
+        // total ignores Patreon's platform fee and any failed/declined charges. Not a real
+        // historical figure - never treat as tax-relevant income.
+        isEstimate: true,
+        message: 'totalRevenue reflects current active pledge commitments (next-charge estimate), lifetimeRevenue is total historically paid - neither is exact (excludes Patreon fees and payment failures). Check your Patreon payout history for real figures.'
       };
     } catch (error) {
       console.error('Error fetching Patreon revenue:', error);
@@ -236,10 +255,12 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
   async getPatreonAuthUrl(userId) {
     const clientId = process.env.PATREON_CLIENT_ID;
     const redirectUri = process.env.PATREON_REDIRECT_URI;
-    const scope = 'identity+campaigns+pledges-to-me';
-    
-    const authUrl = `https://www.patreon.com/oauth2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${userId}`;
-    
+    // 'pledges-to-me' was a v1-only scope name - v2 uses 'campaigns.members' instead.
+    // A v1 scope requested against a v2 client silently fails to grant campaign/pledge access.
+    const scope = 'identity campaigns campaigns.members';
+
+    const authUrl = `https://www.patreon.com/oauth2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${userId}`;
+
     return authUrl;
   }
 
@@ -293,21 +314,29 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
       throw new Error('Malformed channel data returned from YouTube API');
     }
 
-    // Save integration to database
+    // Upsert (not create) - the OAuth callback can legitimately fire more than once for the
+    // same channel (reconnecting, or the popup flow re-triggering), and this must update the
+    // existing integration's tokens rather than create a duplicate record for the same channel.
     const PlatformIntegration = require('../models/PlatformIntegration');
-    const integration = new PlatformIntegration({
+    const update = {
       user: userId,
       platform: 'youtube',
       accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token, // may be undefined
       channelId: channel.id,
       channelName: channel.snippet?.title || 'Unknown Channel',
       platformUserId: channel.id,
       platformUsername: channel.snippet?.title || 'Unknown Channel',
       status: 'connected'
-    });
+    };
+    // Google only returns a refresh_token on the first consent - don't overwrite a
+    // previously-stored one with undefined on a reconnect.
+    if (tokens.refresh_token) update.refreshToken = tokens.refresh_token;
 
-    await integration.save();
+    const integration = await PlatformIntegration.findOneAndUpdate(
+      { user: userId, platform: 'youtube', channelId: channel.id },
+      update,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
     return integration;
   }
 
@@ -331,33 +360,42 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
     });
 
     const user = userResponse.data.data[0];
-    
-    // Save integration to database
-    const PlatformIntegration = require('../models/PlatformIntegration');
-    const integration = new PlatformIntegration({
-      user: userId,
-      platform: 'twitch',
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      channelId: user.id,
-      channelName: user.display_name,
-      platformUserId: user.id,
-      platformUsername: user.display_name,
-      status: 'connected'
-    });
 
-    await integration.save();
+    // Upsert (not create) - a reconnect for the same channel must update tokens,
+    // not create a duplicate integration record.
+    const PlatformIntegration = require('../models/PlatformIntegration');
+    const integration = await PlatformIntegration.findOneAndUpdate(
+      { user: userId, platform: 'twitch', channelId: user.id },
+      {
+        user: userId,
+        platform: 'twitch',
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        channelId: user.id,
+        channelName: user.display_name,
+        platformUserId: user.id,
+        platformUsername: user.display_name,
+        status: 'connected'
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
     return integration;
   }
 
   async handlePatreonCallback(code, userId) {
-    const tokenResponse = await axios.post('https://www.patreon.com/api/oauth2/token', {
-      code,
-      grant_type: 'authorization_code',
-      client_id: process.env.PATREON_CLIENT_ID,
-      client_secret: process.env.PATREON_CLIENT_SECRET,
-      redirect_uri: process.env.PATREON_REDIRECT_URI
-    });
+    // Patreon's token endpoint requires application/x-www-form-urlencoded, not JSON -
+    // axios sends a plain object as JSON by default, which Patreon rejects outright
+    // (unsupported_grant_type) since it can't parse grant_type out of a JSON body.
+    const tokenResponse = await axios.post('https://www.patreon.com/api/oauth2/token',
+      new URLSearchParams({
+        code,
+        grant_type: 'authorization_code',
+        client_id: process.env.PATREON_CLIENT_ID,
+        client_secret: process.env.PATREON_CLIENT_SECRET,
+        redirect_uri: process.env.PATREON_REDIRECT_URI
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
 
     const { access_token, refresh_token } = tokenResponse.data;
 
@@ -369,22 +407,25 @@ async getYouTubeRevenue(accessToken, refreshToken, startDate, endDate) {
     });
 
     const campaign = campaignResponse.data.data[0];
-    
-    // Save integration to database
-    const PlatformIntegration = require('../models/PlatformIntegration');
-    const integration = new PlatformIntegration({
-      user: userId,
-      platform: 'patreon',
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      channelId: campaign.id,
-      channelName: campaign.attributes.creation_name,
-      platformUserId: campaign.id,
-      platformUsername: campaign.attributes.creation_name,
-      status: 'connected'
-    });
 
-    await integration.save();
+    // Upsert (not create) - a reconnect for the same campaign must update tokens,
+    // not create a duplicate integration record.
+    const PlatformIntegration = require('../models/PlatformIntegration');
+    const integration = await PlatformIntegration.findOneAndUpdate(
+      { user: userId, platform: 'patreon', channelId: campaign.id },
+      {
+        user: userId,
+        platform: 'patreon',
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        channelId: campaign.id,
+        channelName: campaign.attributes.creation_name,
+        platformUserId: campaign.id,
+        platformUsername: campaign.attributes.creation_name,
+        status: 'connected'
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
     return integration;
   }
 

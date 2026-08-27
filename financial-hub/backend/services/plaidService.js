@@ -21,13 +21,19 @@ class PlaidService {
         user: {
           client_user_id: userId.toString(),
         },
-        client_name: 'Financial Hub',
+        client_name: 'Race-OS',
         products: ['transactions'],
         country_codes: ['US'],
         language: 'en',
         webhook: process.env.PLAID_WEBHOOK_URL,
-        redirect_uri: process.env.PLAID_REDIRECT_URI,
       };
+
+      // redirect_uri is only needed for OAuth-based institutions, and Plaid rejects the
+      // whole request if it's set but not yet registered in the developer dashboard -
+      // only include it once PLAID_REDIRECT_URI_REGISTERED confirms that's been done.
+      if (process.env.PLAID_REDIRECT_URI && process.env.PLAID_REDIRECT_URI_REGISTERED === 'true') {
+        configs.redirect_uri = process.env.PLAID_REDIRECT_URI;
+      }
 
       const response = await this.client.linkTokenCreate(configs);
       return response.data.link_token;
@@ -37,13 +43,41 @@ class PlaidService {
     }
   }
 
+  // "Update mode" - used to re-authenticate an existing Item (e.g. after the bank
+  // requires a fresh login) without creating a new Item/access_token. Passing
+  // access_token (and omitting `products`) is what puts Link into this mode.
+  async createUpdateLinkToken(userId, accessToken) {
+    try {
+      const configs = {
+        user: { client_user_id: userId.toString() },
+        client_name: 'Race-OS',
+        country_codes: ['US'],
+        language: 'en',
+        access_token: accessToken,
+        webhook: process.env.PLAID_WEBHOOK_URL,
+      };
+
+      if (process.env.PLAID_REDIRECT_URI && process.env.PLAID_REDIRECT_URI_REGISTERED === 'true') {
+        configs.redirect_uri = process.env.PLAID_REDIRECT_URI;
+      }
+
+      const response = await this.client.linkTokenCreate(configs);
+      return response.data.link_token;
+    } catch (error) {
+      console.error('Error creating Plaid update-mode link token:', error);
+      throw new Error('Failed to create update link token');
+    }
+  }
+
   async exchangePublicToken(publicToken) {
     try {
       const response = await this.client.itemPublicTokenExchange({
         public_token: publicToken,
       });
-      
-      return response.data.access_token;
+
+      // BankIntegration.itemId is required for provider 'plaid' - callers must
+      // persist this, not just access_token, or the integration fails to save.
+      return { accessToken: response.data.access_token, itemId: response.data.item_id };
     } catch (error) {
       console.error('Error exchanging public token:', error);
       throw new Error('Failed to exchange public token');
@@ -81,17 +115,34 @@ class PlaidService {
         access_token: accessToken,
         start_date: startDate.toISOString().split('T')[0], // YYYY-MM-DD format
         end_date: endDate.toISOString().split('T')[0],
-        count: 500,
-        offset: 0,
+        // count/offset/account_ids must live under `options` - Plaid rejects them
+        // as top-level fields with UNKNOWN_FIELDS.
+        options: {
+          count: 500,
+          offset: 0,
+        },
       };
 
       if (accountIds && accountIds.length > 0) {
-        request.account_ids = accountIds;
+        request.options.account_ids = accountIds;
       }
 
-      const response = await this.client.transactionsGet(request);
-      
-      return response.data.transactions.map(transaction => ({
+      // A single request caps out at 500 transactions - page through offset until
+      // we've pulled everything the query matched, or a high-volume account/date
+      // range silently loses everything past the first page.
+      const allTransactions = [];
+      let totalTransactions = Infinity;
+
+      while (allTransactions.length < totalTransactions) {
+        const response = await this.client.transactionsGet(request);
+        totalTransactions = response.data.total_transactions;
+        allTransactions.push(...response.data.transactions);
+        request.options.offset = allTransactions.length;
+
+        if (response.data.transactions.length === 0) break; // safety net against an infinite loop
+      }
+
+      return allTransactions.map(transaction => ({
         id: transaction.transaction_id,
         account_id: transaction.account_id,
         amount: transaction.amount,
@@ -182,51 +233,6 @@ class PlaidService {
     }
   }
 
-  // Webhook handler for Plaid events
-  async handleWebhook(webhookBody) {
-    try {
-      const { webhook_type, webhook_code, item_id, new_transactions } = webhookBody;
-      
-      switch (webhook_type) {
-        case 'TRANSACTIONS':
-          if (webhook_code === 'INITIAL_UPDATE') {
-            console.log(`Initial transaction update for item ${item_id}`);
-            // Handle initial transaction load
-          } else if (webhook_code === 'HISTORICAL_UPDATE') {
-            console.log(`Historical transaction update for item ${item_id}`);
-            // Handle historical transaction load
-          } else if (webhook_code === 'DEFAULT_UPDATE') {
-            console.log(`New transactions available for item ${item_id}: ${new_transactions}`);
-            // Handle new transaction updates
-          }
-          break;
-          
-        case 'ITEM':
-          if (webhook_code === 'ERROR') {
-            console.error(`Item error for ${item_id}:`, webhookBody.error);
-            // Handle item errors
-          } else if (webhook_code === 'PENDING_EXPIRATION') {
-            console.log(`Item ${item_id} access will expire soon`);
-            // Handle pending expiration
-          }
-          break;
-          
-        case 'AUTH':
-          if (webhook_code === 'AUTOMATICALLY_VERIFIED') {
-            console.log(`Auth automatically verified for item ${item_id}`);
-          }
-          break;
-          
-        default:
-          console.log(`Unhandled webhook type: ${webhook_type}`);
-      }
-      
-      return { processed: true };
-    } catch (error) {
-      console.error('Error handling Plaid webhook:', error);
-      throw new Error('Failed to process webhook');
-    }
-  }
 }
 
 module.exports = new PlaidService();

@@ -13,6 +13,7 @@ import {
 import {
   CheckCircleIcon
 } from '@heroicons/react/24/solid';
+import { apiFetch, getApiUrl, getAuthToken } from '../utils/api';
 
 const BrandingSettings = () => {
   const [branding, setBranding] = useState({
@@ -79,11 +80,7 @@ const BrandingSettings = () => {
 
   const fetchBranding = async () => {
     try {
-      const response = await fetch('/api/branding', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch('api/branding');
 
       if (response.ok) {
         const data = await response.json();
@@ -101,11 +98,7 @@ const BrandingSettings = () => {
 
   const fetchColorPalettes = async () => {
     try {
-      const response = await fetch('/api/branding/color-palette', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch('api/branding/color-palette');
 
       if (response.ok) {
         const data = await response.json();
@@ -119,12 +112,8 @@ const BrandingSettings = () => {
   const handleSave = async () => {
     try {
       setSaving(true);
-      const response = await fetch('/api/branding', {
+      const response = await apiFetch('api/branding', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify(branding)
       });
 
@@ -151,11 +140,11 @@ const BrandingSettings = () => {
       const formData = new FormData();
       formData.append('logo', logoFile);
 
-      const response = await fetch('/api/branding/logo', {
+      // multipart upload can't go through apiFetch (it always sets Content-Type: application/json)
+      const token = await getAuthToken();
+      const response = await fetch(getApiUrl('api/branding/logo'), {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData
       });
 
@@ -179,12 +168,7 @@ const BrandingSettings = () => {
 
   const handleLogoRemove = async () => {
     try {
-      const response = await fetch('/api/branding/logo', {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch('api/branding/logo', { method: 'DELETE' });
 
       if (response.ok) {
         setLogoPreview(null);
@@ -238,12 +222,8 @@ const BrandingSettings = () => {
 
   const sendTestEmail = async (type) => {
     try {
-      const response = await fetch('/api/branding/test-email', {
+      const response = await apiFetch('api/branding/test-email', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({ type })
       });
 

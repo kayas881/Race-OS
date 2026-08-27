@@ -13,6 +13,7 @@ import {
   CheckCircleIcon,
   ExclamationCircleIcon
 } from '@heroicons/react/24/solid';
+import { apiFetch } from '../utils/api';
 
 const ClientDashboard = () => {
   const [dashboardData, setDashboardData] = useState({
@@ -36,11 +37,7 @@ const ClientDashboard = () => {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/clients/dashboard', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch('api/clients/dashboard');
 
       if (response.ok) {
         const data = await response.json();

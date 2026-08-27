@@ -16,6 +16,7 @@ import {
   FileText
 } from 'lucide-react';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { apiFetch } from '../utils/api';
 
 const Invoices = () => {
   const [invoices, setInvoices] = useState([]);
@@ -36,7 +37,6 @@ const Invoices = () => {
   const fetchInvoices = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
       const query = new URLSearchParams({
         page,
         limit: 10,
@@ -44,12 +44,7 @@ const Invoices = () => {
         ...(searchTerm && { search: searchTerm })
       });
 
-      const response = await fetch(`/api/invoices?${query}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await apiFetch(`api/invoices?${query}`);
 
       const data = await response.json();
       if (response.ok) {
@@ -67,13 +62,7 @@ const Invoices = () => {
 
   const fetchStats = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('/api/invoices/stats', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await apiFetch('api/invoices/stats');
 
       const data = await response.json();
       if (response.ok) {
@@ -86,13 +75,8 @@ const Invoices = () => {
 
   const handleStatusUpdate = async (invoiceId, newStatus, paymentData = {}) => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`/api/invoices/${invoiceId}/status`, {
+      const response = await apiFetch(`api/invoices/${invoiceId}/status`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify({ status: newStatus, ...paymentData })
       });
 
@@ -112,13 +96,7 @@ const Invoices = () => {
     if (!window.confirm('Are you sure you want to delete this invoice?')) return;
 
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`/api/invoices/${invoiceId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await apiFetch(`api/invoices/${invoiceId}`, { method: 'DELETE' });
 
       if (response.ok) {
         fetchInvoices();
@@ -134,12 +112,7 @@ const Invoices = () => {
 
   const downloadPDF = async (invoiceId, invoiceNumber) => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`/api/invoices/${invoiceId}/pdf`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await apiFetch(`api/invoices/${invoiceId}/pdf`);
 
       if (response.ok) {
         const blob = await response.blob();
@@ -149,8 +122,10 @@ const Invoices = () => {
         a.download = `invoice-${invoiceNumber}.pdf`;
         document.body.appendChild(a);
         a.click();
-        window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
+        // Revoking immediately races Chrome's async download write and produces
+        // a 0-byte file; give the browser time to actually read the blob first.
+        setTimeout(() => window.URL.revokeObjectURL(url), 1000);
       } else {
         setError('Failed to download PDF');
       }
@@ -161,20 +136,20 @@ const Invoices = () => {
 
   const sendEmail = async (invoiceId) => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`/api/invoices/${invoiceId}/email`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await apiFetch(`api/invoices/${invoiceId}/email`, { method: 'POST' });
+
+      const data = await response.json();
 
       if (response.ok) {
-        alert('Invoice sent successfully!');
+        if (data.testUrl) {
+          // Dev mode: emails go to Ethereal (a fake SMTP catcher), not a real inbox.
+          alert(`Invoice sent successfully! (Dev mode - no real email was delivered)\n\nPreview it here: ${data.testUrl}`);
+          window.open(data.testUrl, '_blank');
+        } else {
+          alert('Invoice sent successfully!');
+        }
         fetchInvoices();
       } else {
-        const data = await response.json();
         setError(data.error || 'Failed to send email');
       }
     } catch (error) {
@@ -540,8 +515,6 @@ const CreateInvoiceModal = ({ onClose, onSuccess }) => {
     setError('');
 
     try {
-      const token = localStorage.getItem('token');
-      
       // Ensure all items have calculated amounts
       const processedItems = formData.items.map(item => ({
         ...item,
@@ -560,12 +533,8 @@ const CreateInvoiceModal = ({ onClose, onSuccess }) => {
         subtotal: processedItems.reduce((sum, item) => sum + item.amount, 0)
       };
 
-      const response = await fetch('/api/invoices', {
+      const response = await apiFetch('api/invoices', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(invoiceData)
       });
 

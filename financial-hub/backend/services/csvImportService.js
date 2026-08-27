@@ -4,6 +4,7 @@ const path = require('path');
 const { parse, format, isValid } = require('date-fns');
 const Transaction = require('../models/Transaction');
 const Account = require('../models/Account');
+const CategorizationService = require('./categorization');
 
 class CSVImportService {
   constructor() {
@@ -255,10 +256,10 @@ class CSVImportService {
       }
     }
     
-    // Determine transaction type (debit/credit)
-    // Negative amounts are typically debits
-    const type = amount < 0 ? 'debit' : 'credit';
-    
+    // Determine transaction type - negative amounts are money leaving the account (expense),
+    // positive amounts are money coming in (income). Must match Transaction schema's enum exactly.
+    const type = amount < 0 ? 'expense' : 'income';
+
     return {
       date,
       description: description.trim(),
@@ -266,58 +267,41 @@ class CSVImportService {
       type,
       balance,
       reference: reference?.trim(),
-      currency: format.currency,
-      category: this.categorizeTransaction(description)
+      currency: format.currency
+      // category/businessClassification/taxDeductible are filled in by
+      // CategorizationService in processTransactions - it needs to run async
+      // (possible DB-backed user model lookup) so it can't happen in this
+      // sync per-row parse step.
     };
-  }
-
-  categorizeTransaction(description) {
-    const desc = description.toLowerCase();
-    
-    // Simple categorization rules
-    if (desc.includes('salary') || desc.includes('payroll')) return 'income';
-    if (desc.includes('grocery') || desc.includes('supermarket')) return 'groceries';
-    if (desc.includes('fuel') || desc.includes('gas') || desc.includes('petrol')) return 'transportation';
-    if (desc.includes('restaurant') || desc.includes('food') || desc.includes('dining')) return 'dining';
-    if (desc.includes('atm') || desc.includes('cash withdrawal')) return 'cash';
-    if (desc.includes('transfer') || desc.includes('tfr')) return 'transfer';
-    if (desc.includes('payment') || desc.includes('bill')) return 'bills';
-    if (desc.includes('interest')) return 'interest';
-    if (desc.includes('fee') || desc.includes('charge')) return 'fees';
-    if (desc.includes('medical') || desc.includes('hospital')) return 'healthcare';
-    if (desc.includes('insurance')) return 'insurance';
-    if (desc.includes('rent')) return 'housing';
-    if (desc.includes('shopping') || desc.includes('purchase')) return 'shopping';
-    if (desc.includes('subscription') || desc.includes('netflix') || desc.includes('spotify')) return 'subscriptions';
-    
-    return 'other';
   }
 
   async getOrCreateAccount(userId, format, accountType) {
     try {
-      // Try to find existing account for this bank
+      // Try to find existing account for this bank (institutionName is the schema's
+      // actual field for this - there is no top-level bankName/country/currency/balance-number)
       let account = await Account.findOne({
         user: userId,
-        bankName: format.name,
-        accountType: accountType
+        institutionName: format.name,
+        accountType: accountType,
+        platform: 'csv_import'
       });
-      
+
       if (!account) {
-        // Create new account
         account = new Account({
           user: userId,
+          // Deterministic per user+bank+type so re-imports for the same bank reuse this account.
+          accountId: `csv-${userId}-${format.name.toLowerCase().replace(/\s+/g, '-')}-${accountType}`,
           accountName: `${format.name} ${accountType.charAt(0).toUpperCase() + accountType.slice(1)}`,
           accountType: accountType,
-          balance: 0,
-          currency: format.currency,
-          bankName: format.name,
-          country: format.country,
+          platform: 'csv_import',
+          institutionName: format.name,
+          balance: { current: 0, currency: format.currency },
           isActive: true
         });
-        
+
         await account.save();
       }
-      
+
       return account;
     } catch (error) {
       console.error('Error creating/finding account:', error);
@@ -348,15 +332,27 @@ class CSVImportService {
           continue;
         }
         
+        // Same rule-based/ML categorization used for Plaid + manual transactions,
+        // so CSV-imported data feeds the tax deduction math and Reports breakdown
+        // consistently instead of falling into its own disconnected category set.
+        const categorization = await CategorizationService.categorizeTransaction({
+          description: transactionData.description,
+          amount: transactionData.amount,
+          type: transactionData.type
+        }, account.user);
+
         // Create new transaction
         const transaction = new Transaction({
           user: account.user,
           account: account._id,
+          transactionId: `csv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           date: transactionData.date,
           description: transactionData.description,
           amount: transactionData.amount,
           type: transactionData.type,
-          category: transactionData.category,
+          category: categorization.category,
+          businessClassification: categorization.businessClassification,
+          taxDeductible: categorization.taxDeductible,
           currency: transactionData.currency,
           balance: transactionData.balance,
           reference: transactionData.reference,
@@ -378,8 +374,8 @@ class CSVImportService {
           }).sort({ date: -1 });
           
           if (latestTransaction && latestTransaction._id.equals(transaction._id)) {
-            account.balance = transactionData.balance;
-            account.lastUpdated = new Date();
+            account.balance.current = transactionData.balance;
+            account.lastSynced = new Date();
             await account.save();
           }
         }

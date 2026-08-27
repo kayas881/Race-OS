@@ -2,7 +2,6 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const auth = require('../middleware/auth');
 const taxCalculationService = require('../services/taxCalculation');
-const taxService = require('../services/taxService');
 const TaxCalculation = require('../models/TaxCalculation');
 
 const router = express.Router();
@@ -266,8 +265,7 @@ router.get('/quarterly-schedule', auth, async (req, res) => {
         quarterlyCalc = await taxCalculationService.calculateTaxes(req.user.id, currentYear, quarter);
       }
 
-      const dueDate = taxCalculationService.quarterlyDueDates?.[quarter] || 
-                     new Date(currentYear, quarter * 3 - 1, 15);
+      const dueDate = taxCalculationService.getQuarterlyDueDate(quarter, currentYear);
 
       schedule.push({
         quarter,
@@ -292,14 +290,13 @@ router.get('/quarterly-schedule', auth, async (req, res) => {
 // @access  Private
 router.get('/quarterly-dates', auth, async (req, res) => {
   try {
-    const upcomingDates = taxService.getUpcomingQuarterlyDates();
-    const quarterlyIncome = await taxService.getQuarterlyTaxSummary(req.user.id);
-    const reminders = taxService.generateTaxReminders(upcomingDates, quarterlyIncome);
+    const upcomingDates = taxCalculationService.getUpcomingQuarterlyDates();
+    const reminders = taxCalculationService.generateTaxReminders(upcomingDates);
 
     res.json({
       upcomingDates,
       reminders,
-      currentQuarter: taxService.getCurrentQuarter()
+      currentQuarter: taxCalculationService.getCurrentQuarter()
     });
   } catch (error) {
     console.error('Error fetching quarterly dates:', error);
@@ -320,10 +317,9 @@ router.post('/calculate-set-aside', auth, [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { amount, country = 'US' } = req.body;
-    const userTaxSettings = await taxService.getUserTaxSettings(req.user.id);
-    
-    const calculation = taxService.calculateTaxSetAside(amount, userTaxSettings, country);
+    const { amount } = req.body;
+
+    const calculation = await taxCalculationService.calculateTaxSetAside(req.user.id, parseFloat(amount), 'income');
 
     res.json({
       ...calculation,
@@ -350,12 +346,12 @@ router.post('/calculate-set-aside', auth, [
 router.get('/quarterly-summary', auth, async (req, res) => {
   try {
     const { year = new Date().getFullYear() } = req.query;
-    const summary = await taxService.getQuarterlyTaxSummary(req.user.id, parseInt(year));
+    const summary = await taxCalculationService.getQuarterlyTaxSummary(req.user.id, parseInt(year));
 
     res.json({
       year: parseInt(year),
       quarters: summary,
-      upcomingDates: taxService.getUpcomingQuarterlyDates()
+      upcomingDates: taxCalculationService.getUpcomingQuarterlyDates()
     });
   } catch (error) {
     console.error('Error fetching quarterly summary:', error);
@@ -369,7 +365,7 @@ router.get('/quarterly-summary', auth, async (req, res) => {
 router.get('/ytd-liability', auth, async (req, res) => {
   try {
     const { year = new Date().getFullYear() } = req.query;
-    const liability = await taxService.calculateYTDTaxLiability(req.user.id, parseInt(year));
+    const liability = await taxCalculationService.calculateYTDLiability(req.user.id, parseInt(year));
 
     res.json(liability);
   } catch (error) {
@@ -393,11 +389,11 @@ router.put('/settings', auth, [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const settings = await taxService.saveUserTaxSettings(req.user.id, req.body);
+    const settings = await taxCalculationService.saveUserTaxSettings(req.user.id, req.body);
 
     res.json({
       message: 'Tax settings updated successfully',
-      settings: settings.userTaxSettings
+      settings
     });
   } catch (error) {
     console.error('Error updating tax settings:', error);
@@ -410,7 +406,7 @@ router.put('/settings', auth, [
 // @access  Private
 router.get('/settings', auth, async (req, res) => {
   try {
-    const settings = await taxService.getUserTaxSettings(req.user.id);
+    const settings = await taxCalculationService.getUserTaxSettings(req.user.id);
     res.json(settings);
   } catch (error) {
     console.error('Error fetching tax settings:', error);

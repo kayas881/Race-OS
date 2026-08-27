@@ -25,7 +25,7 @@ const AccountSchema = new mongoose.Schema({
   accountSubtype: String,
   platform: {
     type: String,
-    enum: ['plaid', 'youtube', 'twitch', 'patreon', 'substack', 'stripe', 'paypal', 'manual'],
+    enum: ['plaid', 'youtube', 'twitch', 'patreon', 'substack', 'stripe', 'paypal', 'manual', 'csv_import'],
     required: true
   },
   balance: {

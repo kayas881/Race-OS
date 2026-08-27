@@ -6,6 +6,7 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon
 } from '@heroicons/react/24/outline';
+import { apiFetch } from '../utils/api';
 
 const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
   const [formData, setFormData] = useState({
@@ -74,10 +75,8 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
     
     setLoading(true);
     try {
-      const response = await fetch(`/api/transactions/${transaction._id}/categorization-suggestions`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
+      const response = await apiFetch(`api/transactions/${transaction._id}/categorization-suggestions`);
+
       if (response.ok) {
         const data = await response.json();
         setSuggestions(data.suggestions || []);
@@ -108,12 +107,8 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
     setSaving(true);
 
     try {
-      const response = await fetch(`/api/transactions/${transaction._id}/categorize`, {
+      const response = await apiFetch(`api/transactions/${transaction._id}/categorize`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify(formData)
       });
 
@@ -134,11 +129,8 @@ const CategorizationModal = ({ isOpen, onClose, transaction, onUpdate }) => {
 
   const retrainModel = async () => {
     try {
-      const response = await fetch('/api/transactions/retrain-model', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
+      const response = await apiFetch('api/transactions/retrain-model', { method: 'POST' });
+
       const data = await response.json();
       if (data.trained) {
         alert('Smart categorization model updated successfully!');

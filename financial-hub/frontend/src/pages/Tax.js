@@ -10,6 +10,7 @@ import {
   ClockIcon,
   ChartBarIcon
 } from '@heroicons/react/24/outline';
+import { apiFetch } from '../utils/api';
 
 const Tax = () => {
   const [quarterlyDates, setQuarterlyDates] = useState([]);
@@ -26,15 +27,9 @@ const Tax = () => {
     setLoading(true);
     try {
       const [datesRes, summaryRes, liabilityRes] = await Promise.all([
-        fetch('/api/tax/quarterly-dates', {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        }),
-        fetch(`/api/tax/quarterly-summary?year=${selectedYear}`, {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        }),
-        fetch(`/api/tax/ytd-liability?year=${selectedYear}`, {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        })
+        apiFetch('api/tax/quarterly-dates'),
+        apiFetch(`api/tax/quarterly-summary?year=${selectedYear}`),
+        apiFetch(`api/tax/ytd-liability?year=${selectedYear}`)
       ]);
 
       if (datesRes.ok) {
@@ -109,7 +104,7 @@ const Tax = () => {
             onChange={(e) => setSelectedYear(parseInt(e.target.value))}
             className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            {[2025, 2024, 2023].map(year => (
+            {[0, 1, 2].map(offset => new Date().getFullYear() - offset).map(year => (
               <option key={year} value={year}>{year}</option>
             ))}
           </select>
@@ -187,7 +182,7 @@ const Tax = () => {
                       <div className="flex items-center space-x-3">
                         {status.icon}
                         <div>
-                          <h3 className="font-medium">{date.quarter} 2025</h3>
+                          <h3 className="font-medium">{date.quarter} {new Date(date.dueDate).getFullYear()}</h3>
                           <p className="text-sm">
                             Due: {new Date(date.dueDate).toLocaleDateString()}
                           </p>

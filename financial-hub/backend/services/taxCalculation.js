@@ -179,8 +179,8 @@ class TaxCalculationService {
     const adjustedGrossIncome = incomeData.businessIncome - expenseData.deductibleExpenses;
     const selfEmploymentIncome = Math.max(0, adjustedGrossIncome);
 
-    const selfEmploymentTax = this.calculateSelfEmploymentTax(selfEmploymentIncome);
-    const federalTaxOwed = this.calculateFederalIncomeTax(adjustedGrossIncome, user.taxInfo.filingStatus);
+    const selfEmploymentTax = this.calculateSelfEmploymentTax(selfEmploymentIncome, user.taxInfo.selfEmploymentTaxRate);
+    const federalTaxOwed = this.calculateFederalIncomeTax(adjustedGrossIncome, user.taxInfo.filingStatus, user.taxInfo.federalTaxRate);
     const stateTaxOwed = this.calculateStateTax(adjustedGrossIncome, user.taxInfo.state, user.taxInfo.stateTaxRate);
 
     const totalTaxOwed = federalTaxOwed + stateTaxOwed + selfEmploymentTax;
@@ -396,10 +396,10 @@ class TaxCalculationService {
 
     transactions.forEach(transaction => {
       totalIncome += Math.abs(transaction.amount);
-      if (transaction.category && 
-          ['freelance', 'youtube', 'twitch', 'patreon', 'sponsorship', 'affiliate'].includes(
-            transaction.category.toLowerCase()
-          )) {
+      // businessClassification is computed once at transaction-creation time by
+      // services/categorization.js (rule-based/ML, and Category.primary-aware) -
+      // trust it instead of re-guessing from a hardcoded category slug list here.
+      if (transaction.businessClassification === 'business') {
         businessIncome += Math.abs(transaction.amount);
       } else {
         otherIncome += Math.abs(transaction.amount);
@@ -429,10 +429,11 @@ class TaxCalculationService {
       const amount = Math.abs(transaction.amount);
       totalExpenses += amount;
 
-      if (transaction.category && 
-          ['office_supplies', 'software', 'equipment', 'travel', 'meals', 'education', 'marketing'].includes(
-            transaction.category.toLowerCase()
-          )) {
+      // taxDeductible.isDeductible is computed once at transaction-creation time by
+      // services/categorization.js - trust it instead of re-guessing from a hardcoded
+      // category slug list here (this stayed in sync with categorization.js's slugs
+      // by luck, and broke silently for any other categorization source).
+      if (transaction.taxDeductible?.isDeductible) {
         deductibleExpenses += amount;
       } else {
         personalExpenses += amount;
@@ -447,11 +448,11 @@ class TaxCalculationService {
     };
   }
 
-  calculateSelfEmploymentTax(selfEmploymentIncome) {
+  calculateSelfEmploymentTax(selfEmploymentIncome, customRate = null) {
     if (selfEmploymentIncome <= 0) return 0;
 
-    let tax = selfEmploymentIncome * this.selfEmploymentTaxRate;
-    
+    let tax = selfEmploymentIncome * (customRate || this.selfEmploymentTaxRate);
+
     if (selfEmploymentIncome > this.additionalMedicareTaxThreshold) {
       const additionalMedicareIncome = selfEmploymentIncome - this.additionalMedicareTaxThreshold;
       tax += additionalMedicareIncome * this.additionalMedicareTaxRate;
@@ -460,12 +461,17 @@ class TaxCalculationService {
     return tax;
   }
 
-  calculateFederalIncomeTax(adjustedGrossIncome, filingStatus) {
+  calculateFederalIncomeTax(adjustedGrossIncome, filingStatus, customRate = null) {
     if (adjustedGrossIncome <= 0) return 0;
 
-    const brackets = filingStatus === 'married_joint' ? 
+    // A user-set flat override skips the bracket/deduction calculation entirely.
+    if (customRate) {
+      return adjustedGrossIncome * customRate;
+    }
+
+    const brackets = filingStatus === 'married_joint' ?
       this.federalTaxBracketsMarried : this.federalTaxBrackets;
-    
+
     const standardDeduction = this.standardDeductions[filingStatus] || this.standardDeductions.single;
     const taxableIncome = Math.max(0, adjustedGrossIncome - standardDeduction);
 
@@ -492,10 +498,10 @@ class TaxCalculationService {
   }
 
   calculateAnnualTaxLiability(annualIncome, user) {
-    const federalTax = this.calculateFederalIncomeTax(annualIncome, user.taxInfo.filingStatus);
-    const stateTax = this.calculateStateTax(annualIncome, user.taxInfo.state);
-    const selfEmploymentTax = this.calculateSelfEmploymentTax(annualIncome);
-    
+    const federalTax = this.calculateFederalIncomeTax(annualIncome, user.taxInfo.filingStatus, user.taxInfo.federalTaxRate);
+    const stateTax = this.calculateStateTax(annualIncome, user.taxInfo.state, user.taxInfo.stateTaxRate);
+    const selfEmploymentTax = this.calculateSelfEmploymentTax(annualIncome, user.taxInfo.selfEmploymentTaxRate);
+
     return federalTax + stateTax + selfEmploymentTax;
   }
 
@@ -521,6 +527,259 @@ class TaxCalculationService {
     ];
 
     return quarterDueDates.find(date => date > now) || quarterDueDates[0];
+  }
+
+  // Due date for a specific quarter/year - always computed, never hardcoded to a
+  // specific year (a hardcoded-year table silently gives wrong dates once that year passes).
+  getQuarterlyDueDate(quarter, year) {
+    const dueDates = {
+      1: new Date(year, 3, 15),      // Q1 - April 15
+      2: new Date(year, 5, 15),      // Q2 - June 15
+      3: new Date(year, 8, 15),      // Q3 - September 15
+      4: new Date(year + 1, 0, 15)   // Q4 - January 15 next year
+    };
+    return dueDates[quarter];
+  }
+
+  // All four quarters' due dates for the current year, annotated with days-until
+  // and flags for "coming up soon" / "recently missed" - always relative to today,
+  // never hardcoded to a specific year.
+  getUpcomingQuarterlyDates() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const entries = [1, 2, 3, 4].map(quarter => ({
+      quarter: `Q${quarter}`,
+      dueDate: this.getQuarterlyDueDate(quarter, year)
+    }));
+
+    const result = [];
+    entries.forEach(({ quarter, dueDate }) => {
+      if (dueDate > now) {
+        const daysUntil = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+        result.push({ quarter, dueDate: dueDate.toISOString(), daysUntil, isUrgent: daysUntil <= 30, isPastDue: false });
+      } else {
+        const daysPast = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
+        if (daysPast <= 30) {
+          result.push({ quarter, dueDate: dueDate.toISOString(), daysUntil: -daysPast, isUrgent: true, isPastDue: true });
+        }
+      }
+    });
+
+    return result.sort((a, b) => a.daysUntil - b.daysUntil);
+  }
+
+  getCurrentQuarter() {
+    const month = new Date().getMonth() + 1; // 1-12
+    if (month <= 3) return 'Q1';
+    if (month <= 6) return 'Q2';
+    if (month <= 9) return 'Q3';
+    return 'Q4';
+  }
+
+  getQuarterDateRange(quarter, year) {
+    const quarterNum = parseInt(String(quarter).replace('Q', ''), 10);
+    const startMonth = (quarterNum - 1) * 3;
+    const startDate = new Date(year, startMonth, 1);
+    const endDate = new Date(year, startMonth + 3, 0);
+    return { startDate, endDate };
+  }
+
+  generateTaxReminders(upcomingDates) {
+    const reminders = [];
+
+    upcomingDates.forEach(date => {
+      if (date.isPastDue) {
+        reminders.push({
+          type: 'error',
+          priority: 'high',
+          message: `${date.quarter} taxes are ${Math.abs(date.daysUntil)} days overdue!`,
+          action: 'File and pay immediately to avoid penalties',
+          quarter: date.quarter,
+          dueDate: date.dueDate
+        });
+      } else if (date.isUrgent) {
+        reminders.push({
+          type: 'warning',
+          priority: 'high',
+          message: `${date.quarter} taxes due in ${date.daysUntil} days`,
+          action: 'Prepare your quarterly tax payment',
+          quarter: date.quarter,
+          dueDate: date.dueDate
+        });
+      } else if (date.daysUntil <= 60) {
+        reminders.push({
+          type: 'info',
+          priority: 'medium',
+          message: `${date.quarter} taxes due in ${date.daysUntil} days`,
+          action: 'Start gathering tax documents',
+          quarter: date.quarter,
+          dueDate: date.dueDate
+        });
+      }
+    });
+
+    return reminders;
+  }
+
+  // Per-quarter income/expense/estimated-tax summary for the year, using the
+  // real progressive engine (annualized, since tax brackets are annual).
+  async getQuarterlyTaxSummary(userId, year = new Date().getFullYear()) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
+    const summary = {};
+
+    for (const quarter of quarters) {
+      const quarterNum = parseInt(quarter.replace('Q', ''), 10);
+      const { startDate, endDate } = this.getQuarterDateRange(quarter, year);
+
+      const incomeData = await this.calculateIncome(userId, startDate, endDate);
+      const expenseData = await this.calculateExpenses(userId, startDate, endDate);
+      const netIncome = Math.max(0, incomeData.businessIncome - expenseData.deductibleExpenses);
+
+      // Annualize (brackets are annual) then divide back down to a quarterly estimate,
+      // matching the same convention calculateUSTaxes uses for quarter mode.
+      const annualizedLiability = this.calculateAnnualTaxLiability(netIncome * 4, user);
+
+      summary[quarter] = {
+        period: { startDate, endDate },
+        grossIncome: incomeData.businessIncome,
+        businessExpenses: expenseData.totalExpenses,
+        deductibleAmount: expenseData.deductibleExpenses,
+        netIncome,
+        estimatedTax: annualizedLiability / 4,
+        dueDate: this.getQuarterlyDueDate(quarterNum, year),
+        transactionCount: incomeData.transactionCount + expenseData.transactionCount
+      };
+    }
+
+    return summary;
+  }
+
+  // Year-to-date liability using the real engine, replacing the old flat-rate version.
+  async calculateYTDLiability(userId, year = new Date().getFullYear()) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    const yearStart = new Date(year, 0, 1);
+    const yearEnd = new Date(year, 11, 31);
+
+    const incomeData = await this.calculateIncome(userId, yearStart, yearEnd);
+    const expenseData = await this.calculateExpenses(userId, yearStart, yearEnd);
+    const netIncome = Math.max(0, incomeData.businessIncome - expenseData.deductibleExpenses);
+
+    const federal = this.calculateFederalIncomeTax(netIncome, user.taxInfo.filingStatus, user.taxInfo.federalTaxRate);
+    const state = this.calculateStateTax(netIncome, user.taxInfo.state, user.taxInfo.stateTaxRate);
+    const selfEmployment = this.calculateSelfEmploymentTax(netIncome, user.taxInfo.selfEmploymentTaxRate);
+    const estimatedTax = federal + state + selfEmployment;
+
+    return {
+      year,
+      totalIncome: incomeData.businessIncome,
+      totalDeductions: expenseData.deductibleExpenses,
+      netIncome,
+      estimatedTax,
+      effectiveRate: netIncome > 0 ? estimatedTax / netIncome : 0,
+      breakdown: { federal, state, selfEmployment },
+      lastUpdated: new Date()
+    };
+  }
+
+  // Marginal tax to set aside for a single new payment, using the real engine -
+  // computed as the difference in annual liability with vs. without this payment,
+  // so it reflects the user's actual bracket/state/filing-status, not a flat guess.
+  async calculateTaxSetAside(userId, amount, transactionType = 'income') {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+    const country = user.taxInfo?.country || 'US';
+
+    if (transactionType !== 'income' || amount <= 0) {
+      return {
+        grossIncome: amount,
+        breakdown: { federal: 0, state: 0, selfEmployment: 0 },
+        totalSetAside: 0,
+        netIncome: amount,
+        recommendedRate: 0,
+        country
+      };
+    }
+
+    const year = new Date().getFullYear();
+    const yearStart = new Date(year, 0, 1);
+    const yearEnd = new Date(year, 11, 31);
+    const incomeData = await this.calculateIncome(userId, yearStart, yearEnd);
+    const expenseData = await this.calculateExpenses(userId, yearStart, yearEnd);
+    const currentNetIncome = Math.max(0, incomeData.businessIncome - expenseData.deductibleExpenses);
+    const projectedNetIncome = currentNetIncome + amount;
+
+    let breakdown;
+    if (country === 'IN') {
+      const currentTax = this.calculateIndianIncomeTax(currentNetIncome, user.taxInfo.taxRegime).totalTax;
+      const projectedTax = this.calculateIndianIncomeTax(projectedNetIncome, user.taxInfo.taxRegime).totalTax;
+      const currentGST = this.calculateIndianGST(currentNetIncome).gstAmount;
+      const projectedGST = this.calculateIndianGST(projectedNetIncome).gstAmount;
+
+      breakdown = {
+        federal: Math.max(0, projectedTax - currentTax),
+        state: 0,
+        selfEmployment: Math.max(0, projectedGST - currentGST)
+      };
+    } else {
+      const currentFederal = this.calculateFederalIncomeTax(currentNetIncome, user.taxInfo.filingStatus, user.taxInfo.federalTaxRate);
+      const projectedFederal = this.calculateFederalIncomeTax(projectedNetIncome, user.taxInfo.filingStatus, user.taxInfo.federalTaxRate);
+      const currentState = this.calculateStateTax(currentNetIncome, user.taxInfo.state, user.taxInfo.stateTaxRate);
+      const projectedState = this.calculateStateTax(projectedNetIncome, user.taxInfo.state, user.taxInfo.stateTaxRate);
+      const currentSE = this.calculateSelfEmploymentTax(currentNetIncome, user.taxInfo.selfEmploymentTaxRate);
+      const projectedSE = this.calculateSelfEmploymentTax(projectedNetIncome, user.taxInfo.selfEmploymentTaxRate);
+
+      breakdown = {
+        federal: Math.max(0, projectedFederal - currentFederal),
+        state: Math.max(0, projectedState - currentState),
+        selfEmployment: Math.max(0, projectedSE - currentSE)
+      };
+    }
+
+    const totalSetAside = breakdown.federal + breakdown.state + breakdown.selfEmployment;
+
+    return {
+      grossIncome: amount,
+      breakdown,
+      totalSetAside,
+      netIncome: amount - totalSetAside,
+      recommendedRate: amount > 0 ? totalSetAside / amount : 0,
+      country
+    };
+  }
+
+  // User-configurable overrides for the default rates the engine otherwise computes
+  // (progressive brackets / per-state table / standard SE rate). Lives on User.taxInfo,
+  // not a separate settings document - see calculateFederalIncomeTax/calculateStateTax/
+  // calculateSelfEmploymentTax's customRate parameters for how these get applied.
+  async getUserTaxSettings(userId) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    const defaults = { federalIncome: 0.22, stateIncome: 0.05, selfEmployment: 0.1413, totalRecommended: 0.30 };
+
+    return {
+      federalIncome: user.taxInfo?.federalTaxRate ?? defaults.federalIncome,
+      stateIncome: user.taxInfo?.stateTaxRate ?? defaults.stateIncome,
+      selfEmployment: user.taxInfo?.selfEmploymentTaxRate ?? defaults.selfEmployment,
+      // totalRecommended has no equivalent in the real engine - total is always
+      // federal + state + selfEmployment, never an independently-settable number.
+      totalRecommended: defaults.totalRecommended
+    };
+  }
+
+  async saveUserTaxSettings(userId, settings) {
+    const update = {};
+    if (settings.federalIncome !== undefined) update['taxInfo.federalTaxRate'] = settings.federalIncome;
+    if (settings.stateIncome !== undefined) update['taxInfo.stateTaxRate'] = settings.stateIncome;
+    if (settings.selfEmployment !== undefined) update['taxInfo.selfEmploymentTaxRate'] = settings.selfEmployment;
+
+    await User.findByIdAndUpdate(userId, { $set: update });
+    return this.getUserTaxSettings(userId);
   }
 
   async generateRecommendations(userId, incomeData, expenseData, totalTaxOwed, year, quarter) {

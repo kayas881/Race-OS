@@ -19,6 +19,7 @@ import {
   ExclamationCircleIcon,
   ClockIcon
 } from '@heroicons/react/24/solid';
+import { apiFetch } from '../utils/api';
 
 const Clients = () => {
   const [clients, setClients] = useState([]);
@@ -52,11 +53,7 @@ const Clients = () => {
         sortOrder
       });
 
-      const response = await fetch(`/api/clients?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch(`api/clients?${params}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -76,12 +73,8 @@ const Clients = () => {
 
   const handleAddClient = async (clientData) => {
     try {
-      const response = await fetch('/api/clients', {
+      const response = await apiFetch('api/clients', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify(clientData)
       });
 
@@ -100,12 +93,8 @@ const Clients = () => {
 
   const handleQuickInvoice = async (clientId, invoiceData) => {
     try {
-      const response = await fetch(`/api/clients/${clientId}/quick-invoice`, {
+      const response = await apiFetch(`api/clients/${clientId}/quick-invoice`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify(invoiceData)
       });
 

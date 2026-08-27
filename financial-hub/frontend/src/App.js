@@ -13,6 +13,9 @@ import BrandingSettings from './pages/BrandingSettings';
 import Reports from './pages/Reports';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import Terms from './pages/Terms';
+import Privacy from './pages/Privacy';
+import ChangePassword from './pages/ChangePassword';
 import OAuthCallback from './pages/OAuthCallback';
 import LoadingSpinner from './components/LoadingSpinner';
 import TaxNotificationSystem from './components/TaxNotificationSystem';
@@ -39,16 +42,21 @@ function App() {
   return (
     <div className="App">
       <Routes>
-        {/* Public routes */}
-        <Route 
-          path="/login" 
-          element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />} 
+        {/* Public routes - the /* wildcard is required for Clerk's multi-step flows
+            (email verification, forgot password, etc.) */}
+        <Route
+          path="/login/*"
+          element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />}
         />
-        <Route 
-          path="/register" 
-          element={!isAuthenticated ? <Register /> : <Navigate to="/dashboard" />} 
+        <Route
+          path="/register/*"
+          element={!isAuthenticated ? <Register /> : <Navigate to="/dashboard" />}
         />
-        
+
+        {/* Legal pages - accessible whether signed in or not */}
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
+
         {/* OAuth callback route (accessible to authenticated users) */}
         <Route 
           path="/integrations/:platform/callback" 
@@ -70,6 +78,7 @@ function App() {
                     <Route path="/clients" element={<Clients />} />
                     <Route path="/integrations" element={<Integrations />} />
                     <Route path="/branding" element={<BrandingSettings />} />
+                    <Route path="/change-password" element={<ChangePassword />} />
                     <Route path="/reports" element={<Reports />} />
                     <Route path="/tax" element={<Tax />} />
                     <Route path="/" element={<Navigate to="/dashboard" />} />

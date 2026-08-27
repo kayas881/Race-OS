@@ -1,7 +1,6 @@
 import React from 'react';
 import { useQuery } from 'react-query';
-import axios from 'axios';
-import { 
+import {
   DollarSign, 
   TrendingUp, 
   AlertTriangle, 
@@ -18,6 +17,7 @@ import { SparklesIcon } from '@heroicons/react/24/outline';
 import LoadingSpinner from '../components/LoadingSpinner';
 import TaxJarWidget from '../components/TaxJarWidget';
 import IncomeChart from '../components/IncomeChart';
+import { apiFetch } from '../utils/api';
 import RecentTransactions from '../components/RecentTransactions';
 import QuickStats from '../components/QuickStats';
 import NotificationWidget from '../components/NotificationWidget';
@@ -25,7 +25,7 @@ import NotificationWidget from '../components/NotificationWidget';
 const Dashboard = () => {
   const { data: dashboardData, isLoading, error } = useQuery(
     'dashboard',
-    () => axios.get('/api/dashboard').then(res => res.data),
+    () => apiFetch('api/dashboard').then(res => res.json()),
     {
       refetchInterval: 30000, // Refetch every 30 seconds
     }
@@ -33,7 +33,7 @@ const Dashboard = () => {
 
   const { data: invoiceData, isLoading: invoicesLoading, error: invoicesError } = useQuery(
     'invoices',
-    () => axios.get('/api/invoices').then(res => res.data),
+    () => apiFetch('api/invoices').then(res => res.json()),
     {
       refetchInterval: 30000,
     }
@@ -288,10 +288,7 @@ const Dashboard = () => {
                   <button 
                     onClick={async () => {
                       try {
-                        const response = await fetch('/api/transactions/retrain-model', {
-                          method: 'POST',
-                          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-                        });
+                        const response = await apiFetch('api/transactions/retrain-model', { method: 'POST' });
                         const data = await response.json();
                         alert(data.message);
                       } catch (error) {
@@ -380,7 +377,7 @@ const Dashboard = () => {
 const ClientOverviewWidget = () => {
   const { data: clientData, isLoading } = useQuery(
     'clientDashboard',
-    () => axios.get('/api/clients/dashboard').then(res => res.data),
+    () => apiFetch('api/clients/dashboard').then(res => res.json()),
     {
       refetchInterval: 60000, // Refetch every minute
     }

@@ -29,6 +29,7 @@ import {
   Cell
 } from 'recharts';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { apiFetch } from '../utils/api';
 
 const Reports = () => {
   const [loading, setLoading] = useState(true);
@@ -54,11 +55,7 @@ const Reports = () => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`/api/reports/analytics?period=${selectedPeriod}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          }
-        });
+        const response = await apiFetch(`api/reports/analytics?period=${selectedPeriod}`);
 
         if (response.ok) {
           const data = await response.json();
@@ -79,11 +76,7 @@ const Reports = () => {
   const fetchReportData = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/reports/analytics?period=${selectedPeriod}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiFetch(`api/reports/analytics?period=${selectedPeriod}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -354,7 +347,7 @@ const Reports = () => {
             {/* Current Quarter Estimate */}
             <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-4">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-700">Q4 2025 Estimate</span>
+                <span className="text-sm font-medium text-gray-700">Q{Math.ceil((new Date().getMonth() + 1) / 3)} {new Date().getFullYear()} Estimate</span>
                 <span className="text-xs text-blue-600 font-medium">
                   {taxForecast.confidence || 85}% Confidence
                 </span>
@@ -370,7 +363,7 @@ const Reports = () => {
             {/* Year-End Projection */}
             <div className="border border-gray-200 rounded-lg p-4">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-700">2025 Year-End</span>
+                <span className="text-sm font-medium text-gray-700">{new Date().getFullYear()} Year-End</span>
                 <span className="text-xs text-green-600 font-medium">Projected</span>
               </div>
               <div className="text-xl font-bold text-gray-900 mb-1">

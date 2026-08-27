@@ -5,11 +5,14 @@ const rateLimit = require('express-rate-limit');
 const database = require('./config/database');
 require('dotenv').config();
 
+const { clerkMiddleware } = require('@clerk/express');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Trust proxy configuration for development environments (Codespaces, etc.)
-if (process.env.NODE_ENV === 'development' || process.env.CODESPACES) {
+// Trust the first hop (nginx in production, or Codespaces' proxy in dev) so
+// express-rate-limit and req.ip see the real client IP instead of the proxy's.
+if (process.env.NODE_ENV === 'development' || process.env.CODESPACES || process.env.NODE_ENV === 'production') {
   app.set('trust proxy', 1);
 }
 
@@ -52,6 +55,16 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// Attaches req.auth from the Clerk session on every request - doesn't block
+// unauthenticated ones itself, that's what the per-route `auth` middleware does.
+app.use(clerkMiddleware());
+
+// Clerk webhooks need the raw request body for signature verification, so this route
+// is registered (with its own raw parser) before the global express.json() below -
+// once json() has consumed the stream for a request, there's nothing left for raw()
+// to read.
+app.use('/api/webhooks', express.raw({ type: 'application/json' }), require('./routes/webhooks'));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -69,14 +82,21 @@ app.use('/api/categories', require('./routes/categories'));
 app.use('/api/tax', require('./routes/tax'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/integrations', require('./routes/integrations'));
-app.use('/api/test-integrations', require('./routes/test-integrations'));
-app.use('/api/test', require('./routes/test'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/clients', require('./routes/clients'));
 app.use('/api/branding', require('./routes/branding'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/reports', require('./routes/reports'));
-app.use('/api/demo', require('./routes/demo'));
+
+// Dev-only debug/demo scaffolding - the frontend never calls any of these routes.
+// /api/test/env-check leaks whether JWT_SECRET etc. are set with no auth at all, and
+// /api/demo/clear permanently deletes a user's transactions/accounts with only `auth`
+// as a gate - neither belongs anywhere near production.
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/test-integrations', require('./routes/test-integrations'));
+  app.use('/api/test', require('./routes/test'));
+  app.use('/api/demo', require('./routes/demo'));
+}
 
 // Serve uploaded files
 app.use('/uploads', express.static('uploads'));

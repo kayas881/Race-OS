@@ -2,6 +2,9 @@ const express = require('express');
 const auth = require('../middleware/auth');
 const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
+const PDFGenerator = require('../utils/pdfGenerator');
+const Branding = require('../models/Branding');
+const emailService = require('../services/emailService');
 
 const router = express.Router();
 
@@ -253,9 +256,10 @@ router.patch('/:id/status', auth, async (req, res) => {
 
 // Helper for send/email logic
 async function markAsSent(invoice) {
-  if (!invoice.sentAt) {
-    invoice.sentAt = new Date();
-    if (invoice.status === 'pending') invoice.status = 'sent';
+  if (!invoice.emailSent) {
+    invoice.emailSent = true;
+    invoice.emailSentDate = new Date();
+    if (invoice.status === 'draft') invoice.status = 'sent';
   }
   invoice.updatedAt = new Date();
   await invoice.save();
@@ -263,13 +267,28 @@ async function markAsSent(invoice) {
 }
 
 // @route   POST /api/invoices/:id/email
-// @desc    Send invoice via email (placeholder)
+// @desc    Email the invoice (with PDF attached) to the client
 router.post('/:id/email', auth, async (req, res) => {
   try {
     const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+
+    const branding = await Branding.getOrCreateForUser(req.user.id);
+    const pdfBuffer = await PDFGenerator.generateInvoicePDF(invoice);
+
+    const result = await emailService.sendInvoiceEmail(
+      invoice,
+      invoice.client,
+      branding.getEmailBranding(),
+      pdfBuffer
+    );
+
+    if (!result.success) {
+      return res.status(500).json({ error: 'Failed to send invoice email', details: result.error });
+    }
+
     await markAsSent(invoice);
-    res.json({ message: 'Email dispatch simulated (placeholder)', invoice });
+    res.json({ message: 'Invoice emailed successfully', testUrl: result.testUrl, invoice });
   } catch (err) {
     console.error('Error emailing invoice:', err);
     res.status(500).json({ error: 'Server error' });
@@ -291,12 +310,17 @@ router.post('/:id/send', auth, async (req, res) => {
 });
 
 // @route   GET /api/invoices/:id/pdf
-// @desc    Generate PDF (placeholder)
+// @desc    Generate and download the invoice as a PDF
 router.get('/:id/pdf', auth, async (req, res) => {
   try {
     const invoice = await Invoice.findOne({ _id: req.params.id, user: req.user.id });
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
-    res.json({ message: 'PDF generation placeholder', invoiceId: invoice._id, invoiceNumber: invoice.invoiceNumber });
+
+    const pdfBuffer = await PDFGenerator.generateInvoicePDF(invoice);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.invoiceNumber}.pdf"`);
+    res.send(pdfBuffer);
   } catch (err) {
     console.error('Error generating invoice PDF:', err);
     res.status(500).json({ error: 'Server error' });

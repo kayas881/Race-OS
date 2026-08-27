@@ -1,26 +1,24 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { 
-  BanknotesIcon, 
-  LinkIcon, 
-  ArrowUpTrayIcon,
+import {
+  BanknotesIcon,
+  LinkIcon,
   CogIcon,
   CheckCircleIcon,
   ExclamationCircleIcon,
   TrashIcon,
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
-import { usePlaidLink } from 'react-plaid-link';
 import { apiFetch } from '../utils/api';
 
 const Integrations = () => {
+  const navigate = useNavigate();
   const [integrations, setIntegrations] = useState([]);
   const [connectedBanks, setConnectedBanks] = useState([]);
   const [connectedPlatforms, setConnectedPlatforms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState(null);
-  const [uploadingCSV, setUploadingCSV] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
 
   useEffect(() => {
     fetchData();
@@ -53,65 +51,32 @@ const Integrations = () => {
     }
   };
 
-  const connectPlaid = async () => {
-    try {
-      const response = await fetch('/api/integrations/plaid/link-token', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      
-      const { linkToken } = await response.json();
-      
-      if (linkToken && linkToken !== 'demo-link-token') {
-        // Real Plaid Link integration
-        alert(`Real Plaid Link would open here with token: ${linkToken}`);
-        // In production, you'd use Plaid Link SDK here
-        // window.Plaid.create({
-        //   token: linkToken,
-        //   onSuccess: (publicToken, metadata) => {
-        //     // Exchange public token
-        //   }
-        // }).open();
-      } else {
-        alert(`Demo: Plaid Link would open here with token: ${linkToken}`);
-      }
-      
-      // Simulate successful connection for demo
-      setTimeout(async () => {
-        const exchangeResponse = await fetch('/api/integrations/plaid/exchange-token', {
-          method: 'POST',
-          headers: { 
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            publicToken: 'demo-public-token',
-            institutionId: 'demo-institution'
-          })
-        });
-        
-        const result = await exchangeResponse.json();
-        alert(`Success: ${result.message}`);
-        fetchData(); // Refresh data
-      }, 2000);
-      
-    } catch (error) {
-      console.error('Error connecting to Plaid:', error);
-    }
+  // Plaid uses its own Link widget (react-plaid-link), not the generic OAuth-popup
+  // pattern the other platforms use - that flow lives on the dedicated Accounts page.
+  const connectPlaid = () => {
+    navigate('/accounts');
   };
 
   const connectPlatform = async (platform) => {
+    // Must open the popup synchronously, in direct response to the click - opening it
+    // after an awaited fetch loses the user-gesture context and Chrome silently blocks it.
+    const popup = window.open('', 'oauth', 'width=500,height=600');
+
     try {
       const response = await apiFetch(`api/integrations/platforms/${platform}/connect`, {
         method: 'POST'
       });
-      
+
       const { authUrl } = await response.json();
-      
+
       if (authUrl && !authUrl.includes('demo')) {
-        // Real OAuth flow - open in new window
-        const popup = window.open(authUrl, 'oauth', 'width=500,height=600');
-        
+        if (!popup || popup.closed) {
+          alert('Please allow popups for this site to connect your account.');
+          return;
+        }
+        // Real OAuth flow - open in the pre-opened window
+        popup.location.href = authUrl;
+
         // Listen for OAuth completion via postMessage
         const handleMessage = (event) => {
           if (event.origin !== window.location.origin) return;
@@ -138,17 +103,14 @@ const Integrations = () => {
           fetchData(); // Refresh data anyway
         }, 30000); // 30 second timeout
       } else {
-        // Demo mode
+        // Demo mode - no real OAuth window needed
+        popup?.close();
         alert(`Demo: ${platform.charAt(0).toUpperCase() + platform.slice(1)} OAuth would open: ${authUrl}`);
-        
+
         // Simulate successful callback for demo
         setTimeout(async () => {
-          const callbackResponse = await fetch(`/api/integrations/platforms/${platform}/callback`, {
+          const callbackResponse = await apiFetch(`api/integrations/platforms/${platform}/callback`, {
             method: 'POST',
-            headers: { 
-              'Authorization': `Bearer ${localStorage.getItem('token')}`,
-              'Content-Type': 'application/json'
-            },
             body: JSON.stringify({ code: 'demo-auth-code' })
           });
           
@@ -159,6 +121,7 @@ const Integrations = () => {
       }
       
     } catch (error) {
+      popup?.close();
       console.error(`Error connecting to ${platform}:`, error);
     }
   };
@@ -175,7 +138,17 @@ const Integrations = () => {
       }
       
       const result = await response.json();
-      alert(`Sync completed: ${result.message}`);
+      let summary = `Sync completed: ${result.message}`;
+      if (result.revenueData) {
+        summary += `\n\nRevenue: $${(result.revenueData.totalRevenue || 0).toFixed(2)}`;
+        if (result.transactionsSynced) {
+          summary += ` (${result.transactionsSynced.created} new, ${result.transactionsSynced.updated} updated transaction${result.transactionsSynced.created + result.transactionsSynced.updated === 1 ? '' : 's'})`;
+        }
+        if (result.revenueData.message) {
+          summary += `\n\n${result.revenueData.message}`;
+        }
+      }
+      alert(summary);
       fetchData(); // Refresh data
       
     } catch (error) {
@@ -204,34 +177,6 @@ const Integrations = () => {
     } catch (error) {
       console.error('Error disconnecting:', error);
       alert(`Disconnect failed: ${error.message}`);
-    }
-  };
-
-  const handleCSVUpload = async () => {
-    if (!selectedFile) return;
-    
-    setUploadingCSV(true);
-    try {
-      const formData = new FormData();
-      formData.append('csvFile', selectedFile);
-      formData.append('bankName', 'Custom Bank');
-      formData.append('accountType', 'checking');
-      
-      const response = await fetch('/api/integrations/csv/upload', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: formData
-      });
-      
-      const result = await response.json();
-      alert(`CSV imported: ${result.imported} transactions processed`);
-      setSelectedFile(null);
-      fetchData(); // Refresh data
-      
-    } catch (error) {
-      console.error('Error uploading CSV:', error);
-    } finally {
-      setUploadingCSV(false);
     }
   };
 
@@ -286,13 +231,22 @@ const Integrations = () => {
               
               <div className="mt-4">
                 {integration.id === 'plaid' ? (
-                  <button
-                    onClick={connectPlaid}
-                    className="w-full flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-                  >
-                    <LinkIcon className="h-4 w-4 mr-2" />
-                    Connect Bank
-                  </button>
+                  integration.comingSoon ? (
+                    <button
+                      onClick={connectPlaid}
+                      className="w-full flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-500 bg-gray-50 hover:bg-gray-100"
+                    >
+                      Coming Soon - Use CSV Import
+                    </button>
+                  ) : (
+                    <button
+                      onClick={connectPlaid}
+                      className="w-full flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                    >
+                      <LinkIcon className="h-4 w-4 mr-2" />
+                      Connect Bank
+                    </button>
+                  )
                 ) : (
                   <button
                     onClick={() => connectPlatform(integration.id)}
@@ -305,38 +259,6 @@ const Integrations = () => {
               </div>
             </motion.div>
           ))}
-        </div>
-      </div>
-
-      {/* CSV Upload */}
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Manual Import</h2>
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Upload Bank Statement (CSV)</h3>
-          <p className="text-sm text-gray-500 mb-4">
-            Upload a CSV file from your bank for manual transaction import
-          </p>
-          
-          <div className="flex items-center space-x-4">
-            <input
-              type="file"
-              accept=".csv"
-              onChange={(e) => setSelectedFile(e.target.files[0])}
-              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-            />
-            <button
-              onClick={handleCSVUpload}
-              disabled={!selectedFile || uploadingCSV}
-              className="flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-400"
-            >
-              {uploadingCSV ? (
-                <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <ArrowUpTrayIcon className="h-4 w-4 mr-2" />
-              )}
-              Upload
-            </button>
-          </div>
         </div>
       </div>
 

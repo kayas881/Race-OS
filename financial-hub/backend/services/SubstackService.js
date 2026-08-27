@@ -111,60 +111,6 @@ class SubstackService {
     });
   }
 
-  // Alternative method: Parse Substack earnings page (requires authentication)
-  async getSubstackRevenue(integrationId) {
-    try {
-      const integration = await PlatformIntegration.findById(integrationId);
-      
-      if (!integration || integration.platform !== 'substack') {
-        throw new Error('Substack integration not found');
-      }
-
-      // Since we can't access real-time data without API, return mock data
-      // In a real implementation, this could use web scraping or CSV updates
-      const mockRevenue = {
-        date: new Date(),
-        totalRevenue: Math.floor(Math.random() * 1000) + 500,
-        adRevenue: 0,
-        subscriptionRevenue: Math.floor(Math.random() * 1000) + 500,
-        donationRevenue: 0,
-        membershipRevenue: 0,
-        other: 0,
-        currency: 'USD'
-      };
-
-      // Add to integration revenue data
-      integration.revenueData.push(mockRevenue);
-      integration.lastSyncAt = new Date();
-      await integration.save();
-
-      return mockRevenue;
-    } catch (error) {
-      console.error('Error fetching Substack revenue:', error);
-      throw new Error('Failed to fetch Substack revenue');
-    }
-  }
-
-  // Method to simulate web scraping for Substack stats
-  async scrapeSubstackStats(publicationUrl, credentials) {
-    try {
-      // This is a placeholder for web scraping implementation
-      // In a real app, you'd use Puppeteer or similar to scrape the stats page
-      
-      // For demo purposes, return mock data
-      return {
-        totalSubscribers: Math.floor(Math.random() * 10000) + 1000,
-        paidSubscribers: Math.floor(Math.random() * 1000) + 100,
-        monthlyRevenue: Math.floor(Math.random() * 5000) + 1000,
-        openRate: Math.floor(Math.random() * 50) + 30,
-        posts: Math.floor(Math.random() * 100) + 50
-      };
-    } catch (error) {
-      console.error('Error scraping Substack stats:', error);
-      throw new Error('Failed to scrape Substack statistics');
-    }
-  }
-
   // Generate Substack CSV template for users
   generateCSVTemplate() {
     const template = [

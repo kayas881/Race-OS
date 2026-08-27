@@ -174,127 +174,83 @@ const storeNotification = (userId, type, subject, recipient, status = 'sent') =>
 // Test weekly summary email
 router.post('/test/weekly-summary', auth, async (req, res) => {
   try {
-    const result = await emailService.sendWeeklySummary(req.user.id);
-    
-    // Store notification
-    storeNotification(
-      req.user.id,
-      'weekly-summary',
-      'Weekly Financial Summary',
-      req.user.email,
-      'sent'
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const branding = await Branding.getOrCreateForUser(req.user.id);
+    const testSummaryData = {
+      summary: {
+        weeklyIncome: 2500,
+        weeklyExpenses: 800,
+        ytdIncome: 45000,
+        ytdExpenses: 15000
+      },
+      weekStart: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      weekEnd: new Date(),
+      transactions: [],
+      taxInfo: {
+        weeklyTaxSetAside: 750,
+        ytdTaxLiability: 13500,
+        nextQuarterlyDue: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      }
+    };
+
+    const result = await emailService.sendWeeklySummary(
+      user.email,
+      testSummaryData,
+      branding.getEmailBranding()
     );
-    
+
+    storeNotification(req.user.id, 'weekly-summary', 'Weekly Financial Summary', user.email, result.success ? 'sent' : 'failed');
+
+    if (!result.success) {
+      return res.status(500).json({ message: 'Error sending weekly summary email', error: result.error });
+    }
+
     res.json({
       message: 'Weekly summary email sent successfully',
       testUrl: result.testUrl
     });
   } catch (error) {
     console.error('Error sending weekly summary:', error);
-    
-    // Store failed notification
-    storeNotification(
-      req.user.id,
-      'weekly-summary',
-      'Weekly Financial Summary',
-      req.user.email,
-      'failed'
-    );
-    
+    storeNotification(req.user.id, 'weekly-summary', 'Weekly Financial Summary', null, 'failed');
     res.status(500).json({ message: 'Error sending weekly summary email' });
-  }
-});
-
-// Test invoice reminder email
-router.post('/test/invoice-reminder', auth, async (req, res) => {
-  try {
-    // Create a mock invoice for testing
-    const mockInvoice = {
-      _id: 'test-invoice-123',
-      invoiceNumber: 'INV-TEST-001',
-      client: {
-        name: 'Test Client',
-        email: req.user.email
-      },
-      amount: 1500,
-      dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
-      status: 'pending'
-    };
-    
-    const result = await emailService.sendInvoiceReminder(mockInvoice);
-    
-    // Store notification
-    storeNotification(
-      req.user.id,
-      'invoice-reminder',
-      `Invoice Reminder - ${mockInvoice.invoiceNumber}`,
-      req.user.email,
-      'sent'
-    );
-    
-    res.json({
-      message: 'Invoice reminder email sent successfully',
-      testUrl: result.testUrl
-    });
-  } catch (error) {
-    console.error('Error sending invoice reminder:', error);
-    
-    // Store failed notification
-    storeNotification(
-      req.user.id,
-      'invoice-reminder',
-      'Invoice Reminder - Test',
-      req.user.email,
-      'failed'
-    );
-    
-    res.status(500).json({ message: 'Error sending invoice reminder email' });
   }
 });
 
 // Test overdue invoice email
 router.post('/test/overdue-invoice', auth, async (req, res) => {
   try {
-    // Create a mock overdue invoice for testing
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const branding = await Branding.getOrCreateForUser(req.user.id);
+
+    // Mock overdue invoice for testing
     const mockInvoice = {
       _id: 'test-overdue-123',
       invoiceNumber: 'INV-TEST-002',
-      client: {
-        name: 'Test Client',
-        email: req.user.email
-      },
-      amount: 2500,
       dueDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000), // 5 days ago
+      total: 2500,
       status: 'overdue'
     };
-    
-    const result = await emailService.sendOverdueInvoiceNotice(mockInvoice, 5);
-    
-    // Store notification
-    storeNotification(
-      req.user.id,
-      'overdue-invoice',
-      `Overdue Invoice - ${mockInvoice.invoiceNumber}`,
-      req.user.email,
-      'sent'
-    );
-    
+    const mockClient = { name: 'Test Client', email: user.email };
+
+    const result = await emailService.sendOverdueNotice(mockInvoice, mockClient, branding.getEmailBranding());
+
+    storeNotification(req.user.id, 'overdue-invoice', `Overdue Invoice - ${mockInvoice.invoiceNumber}`, user.email, result.success ? 'sent' : 'failed');
+
+    if (!result.success) {
+      return res.status(500).json({ message: 'Error sending overdue invoice email', error: result.error });
+    }
+
     res.json({
       message: 'Overdue invoice email sent successfully',
       testUrl: result.testUrl
     });
   } catch (error) {
     console.error('Error sending overdue invoice email:', error);
-    
-    // Store failed notification
-    storeNotification(
-      req.user.id,
-      'overdue-invoice',
-      'Overdue Invoice - Test',
-      req.user.email,
-      'failed'
-    );
-    
+    storeNotification(req.user.id, 'overdue-invoice', 'Overdue Invoice - Test', null, 'failed');
     res.status(500).json({ message: 'Error sending overdue invoice email' });
   }
 });
@@ -302,48 +258,31 @@ router.post('/test/overdue-invoice', auth, async (req, res) => {
 // Test payment confirmation email
 router.post('/test/payment-confirmation', auth, async (req, res) => {
   try {
-    // Create a mock payment for testing
-    const mockPayment = {
-      invoice: {
-        _id: 'test-invoice-456',
-        invoiceNumber: 'INV-TEST-003',
-        amount: 1200
-      },
-      client: {
-        name: 'Test Client',
-        email: req.user.email
-      },
-      amount: 1200,
-      paidDate: new Date()
-    };
-    
-    const result = await emailService.sendPaymentConfirmation(mockPayment);
-    
-    // Store notification
-    storeNotification(
-      req.user.id,
-      'payment-confirmation',
-      `Payment Confirmation - ${mockPayment.invoice.invoiceNumber}`,
-      req.user.email,
-      'sent'
-    );
-    
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const branding = await Branding.getOrCreateForUser(req.user.id);
+
+    // Mock payment for testing
+    const mockInvoice = { _id: 'test-invoice-456', invoiceNumber: 'INV-TEST-003' };
+    const mockClient = { name: 'Test Client', email: user.email };
+    const mockPayment = { amount: 1200, date: new Date(), method: 'bank_transfer' };
+
+    const result = await emailService.sendPaymentConfirmation(mockInvoice, mockClient, mockPayment, branding.getEmailBranding());
+
+    storeNotification(req.user.id, 'payment-confirmation', `Payment Confirmation - ${mockInvoice.invoiceNumber}`, user.email, result.success ? 'sent' : 'failed');
+
+    if (!result.success) {
+      return res.status(500).json({ message: 'Error sending payment confirmation email', error: result.error });
+    }
+
     res.json({
       message: 'Payment confirmation email sent successfully',
       testUrl: result.testUrl
     });
   } catch (error) {
     console.error('Error sending payment confirmation email:', error);
-    
-    // Store failed notification
-    storeNotification(
-      req.user.id,
-      'payment-confirmation',
-      'Payment Confirmation - Test',
-      req.user.email,
-      'failed'
-    );
-    
+    storeNotification(req.user.id, 'payment-confirmation', 'Payment Confirmation - Test', null, 'failed');
     res.status(500).json({ message: 'Error sending payment confirmation email' });
   }
 });

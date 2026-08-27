@@ -7,6 +7,7 @@ import {
   DocumentTextIcon,
   BuildingStorefrontIcon
 } from '@heroicons/react/24/outline';
+import { apiFetch } from '../utils/api';
 
 const ManualTransactionModal = ({ isOpen, onClose, onTransactionCreated }) => {
   const [formData, setFormData] = useState({
@@ -30,9 +31,7 @@ const ManualTransactionModal = ({ isOpen, onClose, onTransactionCreated }) => {
 
   const fetchAccounts = async () => {
     try {
-      const response = await fetch('/api/accounts', {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
+      const response = await apiFetch('api/accounts');
       if (response.ok) {
         const data = await response.json();
         setAccounts(data);
@@ -74,12 +73,8 @@ const ManualTransactionModal = ({ isOpen, onClose, onTransactionCreated }) => {
 
     setLoading(true);
     try {
-      const response = await fetch('/api/transactions/manual', {
+      const response = await apiFetch('api/transactions/manual', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify(formData)
       });
 

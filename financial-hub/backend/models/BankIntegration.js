@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { encrypt, decrypt } = require('../utils/encryption');
 
 const bankIntegrationSchema = new mongoose.Schema({
   user: {
@@ -12,9 +13,15 @@ const bankIntegrationSchema = new mongoose.Schema({
     required: true
   },
   // Plaid specific fields
+  // Encrypted at rest (see utils/encryption.js) - set/get transparently encrypt on
+  // write and decrypt on read for any in-memory document access (doc.accessToken).
+  // decrypt() passes through unchanged values that don't look encrypted, so tokens
+  // written before this was added still work without a migration.
   accessToken: {
     type: String,
-    required: function() { return this.provider === 'plaid'; }
+    required: function() { return this.provider === 'plaid'; },
+    set: encrypt,
+    get: decrypt
   },
   itemId: {
     type: String,
@@ -24,12 +31,16 @@ const bankIntegrationSchema = new mongoose.Schema({
   institutionName: String,
   
   // Connected accounts
+  // NOTE: subdocument fields must never be named "type" - Mongoose treats a
+  // `type: String` key as a shorthand type declaration for the WHOLE object
+  // (turning this into `[String]` instead of a document array) rather than as
+  // a field named "type". Use accountType/accountSubtype instead.
   accounts: [{
     accountId: String,
     name: String,
     officialName: String,
-    type: String,
-    subtype: String,
+    accountType: String,
+    accountSubtype: String,
     mask: String,
     balances: {
       current: Number,

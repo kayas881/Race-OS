@@ -14,10 +14,27 @@ export const getApiUrl = (endpoint) => {
   return `/${cleanEndpoint}`;
 };
 
+// apiFetch is a plain function called from ~15+ files outside any component, but
+// Clerk's getToken() is only reachable via the useAuth() hook. ClerkTokenBridge
+// (mounted once near the root - see index.js) stores the current getToken
+// reference here so this module doesn't need every call site converted into a hook.
+let clerkGetToken = null;
+export const setClerkGetToken = (fn) => {
+  clerkGetToken = fn;
+};
+
+// For the handful of call sites that can't go through apiFetch (multipart uploads,
+// which need to omit the JSON Content-Type apiFetch always sets) but still need a
+// valid Clerk token for their own Authorization header.
+export const getAuthToken = async () => {
+  if (!clerkGetToken) return null;
+  return clerkGetToken();
+};
+
 // Enhanced fetch wrapper that handles API URL construction and common options
 export const apiFetch = async (endpoint, options = {}) => {
   const url = getApiUrl(endpoint);
-  
+
   const defaultOptions = {
     headers: {
       'Content-Type': 'application/json',
@@ -27,10 +44,13 @@ export const apiFetch = async (endpoint, options = {}) => {
     ...options,
   };
 
-  // Add Authorization header if token exists
-  const token = localStorage.getItem('token');
-  if (token) {
-    defaultOptions.headers['Authorization'] = `Bearer ${token}`;
+  if (clerkGetToken) {
+    // getToken() caches internally and only hits the network once the token is
+    // actually expired, so calling it fresh on every request is cheap.
+    const token = await clerkGetToken();
+    if (token) {
+      defaultOptions.headers['Authorization'] = `Bearer ${token}`;
+    }
   }
 
   try {

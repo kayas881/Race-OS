@@ -2,28 +2,27 @@ const puppeteer = require('puppeteer');
 
 class PDFGenerator {
   static async generatePDF(html, options = {}) {
-    try {
-      // Check if we're in a development environment where PDF generation might fail
-      if (process.env.DISABLE_PDF_GENERATION === 'true') {
-        console.log('⚠️ PDF generation disabled in development mode');
-        return Buffer.from('PDF generation disabled in development mode');
-      }
-
-      // Try Puppeteer first
-      return await this.generateWithPuppeteer(html, options);
-    } catch (error) {
-      console.error('PDF generation failed with Puppeteer:', error.message);
-      
-      // Fallback: return a simple text-based PDF indication
-      return this.generateFallbackPDF(html);
+    if (process.env.DISABLE_PDF_GENERATION === 'true') {
+      throw new Error('PDF generation is disabled (DISABLE_PDF_GENERATION=true)');
     }
+
+    return await this.generateWithPuppeteer(html, options);
   }
 
   static async generateFromHTML(htmlContent, options = {}) {
     return this.generatePDF(htmlContent, options);
   }
 
+  static formatClientAddress(address) {
+    if (!address) return '';
+    if (typeof address === 'string') return address;
+    return [address.street, address.city, address.state, address.zipCode, address.country]
+      .filter(Boolean)
+      .join(', ');
+  }
+
   static async generateInvoicePDF(invoice) {
+    const clientAddress = this.formatClientAddress(invoice.client.address);
     const htmlContent = `
       <!DOCTYPE html>
       <html>
@@ -152,7 +151,7 @@ class PDFGenerator {
             <div>
               <strong>${invoice.client.name}</strong><br>
               ${invoice.client.email}<br>
-              ${invoice.client.address || ''}<br>
+              ${clientAddress ? clientAddress + '<br>' : ''}
               ${invoice.client.phone || ''}
             </div>
           </div>
@@ -222,7 +221,7 @@ class PDFGenerator {
 
         <div class="payment-info">
           <div class="section-title">Payment Information:</div>
-          <p>Please remit payment within ${invoice.paymentTerms || '30'} days of invoice date.</p>
+          <p>${invoice.terms || 'Payment due within 30 days of invoice date.'}</p>
           <p>Thank you for your business!</p>
         </div>
 
@@ -244,8 +243,6 @@ class PDFGenerator {
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
-        '--no-zygote',
-        '--single-process',
         '--disable-gpu',
         '--disable-features=VizDisplayCompositor'
       ],
@@ -253,39 +250,30 @@ class PDFGenerator {
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
     });
 
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: {
-        top: '20px',
-        right: '20px',
-        bottom: '20px',
-        left: '20px'
-      },
-      ...options
-    });
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    await browser.close();
-    return pdf;
+      const pdfData = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: {
+          top: '20px',
+          right: '20px',
+          bottom: '20px',
+          left: '20px'
+        },
+        ...options
+      });
+
+      // Puppeteer returns a plain Uint8Array, not a Node Buffer — Express's
+      // res.send() only recognizes Buffer as binary, otherwise it JSON-serializes it.
+      return Buffer.from(pdfData);
+    } finally {
+      await browser.close();
+    }
   }
 
-  static generateFallbackPDF(html) {
-    // Simple fallback - return HTML content as buffer
-    // In a real implementation, you might use a different PDF library
-    const fallbackMessage = `
-      PDF Generation Not Available
-      
-      This is a development environment where PDF generation is not configured.
-      In production, this would generate a proper PDF.
-      
-      Invoice content would appear here.
-    `;
-    
-    return Buffer.from(fallbackMessage, 'utf8');
-  }
 }
 
 module.exports = PDFGenerator;

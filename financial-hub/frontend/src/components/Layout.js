@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, Link as RouterLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
   LayoutDashboard, 
@@ -14,7 +14,8 @@ import {
   Link,
   Users,
   Palette,
-  BarChart3
+  BarChart3,
+  KeyRound
 } from 'lucide-react';
 
 const Layout = ({ children }) => {
@@ -119,6 +120,15 @@ const Layout = ({ children }) => {
             </div>
           </div>
           
+          <RouterLink
+            to="/change-password"
+            className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
+            onClick={() => setSidebarOpen(false)}
+          >
+            <KeyRound className="mr-3 h-4 w-4" />
+            Account settings
+          </RouterLink>
+
           <button
             onClick={handleLogout}
             className="w-full flex items-center px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
@@ -126,6 +136,12 @@ const Layout = ({ children }) => {
             <LogOut className="mr-3 h-4 w-4" />
             Sign out
           </button>
+
+          <div className="flex items-center gap-3 px-3 pt-2 text-xs text-gray-400">
+            <RouterLink to="/terms" className="hover:text-gray-600">Terms</RouterLink>
+            <span>&middot;</span>
+            <RouterLink to="/privacy" className="hover:text-gray-600">Privacy</RouterLink>
+          </div>
         </div>
       </div>
 

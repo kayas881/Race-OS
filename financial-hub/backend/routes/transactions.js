@@ -31,11 +31,12 @@ router.get('/', auth, async (req, res) => {
       limit = 50, 
       startDate, 
       endDate, 
-      category, 
-      type, 
+      category,
+      type,
       accountId,
       businessOnly,
-      deductibleOnly 
+      businessClassification,
+      deductibleOnly
     } = req.query;
 
     // Build query
@@ -50,7 +51,11 @@ router.get('/', auth, async (req, res) => {
     if (category) query['category.primary'] = category;
     if (type) query.type = type;
     if (accountId) query.account = accountId;
-    if (businessOnly === 'true') query.businessClassification = 'business';
+    // businessClassification carries the exact value the frontend's filter dropdown
+    // sends ('business'/'personal'/'mixed'); businessOnly is a legacy boolean some
+    // older caller may still pass for the simpler "business only" case.
+    if (businessClassification) query.businessClassification = businessClassification;
+    else if (businessOnly === 'true') query.businessClassification = 'business';
     if (deductibleOnly === 'true') query['taxDeductible.isDeductible'] = true;
 
     const transactions = await Transaction.find(query)
@@ -235,10 +240,9 @@ router.post('/manual', auth, [
     // If this is income and business-related, include tax set-aside calculation
     let taxNotification = null;
     if (type === 'income' && businessClassification === 'business') {
-      const taxService = require('../services/taxService');
-      const userTaxSettings = await taxService.getUserTaxSettings(req.user.id);
-      const taxCalculation = taxService.calculateTaxSetAside(parseFloat(amount), userTaxSettings);
-      
+      const taxCalculationService = require('../services/taxCalculation');
+      const taxCalculation = await taxCalculationService.calculateTaxSetAside(req.user.id, parseFloat(amount), 'income');
+
       taxNotification = {
         type: 'tax_set_aside',
         amount: parseFloat(amount),

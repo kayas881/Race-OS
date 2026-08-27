@@ -5,7 +5,7 @@ const User = require('../models/User');
 const Branding = require('../models/Branding');
 const Transaction = require('../models/Transaction');
 const emailService = require('./emailService');
-const taxService = require('./taxService');
+const taxCalculationService = require('./taxCalculation');
 
 class NotificationScheduler {
   constructor() {
@@ -222,9 +222,9 @@ class NotificationScheduler {
             .reduce((sum, tx) => sum + tx.amount, 0);
 
           // Get tax information
-          const taxInfo = await taxService.calculateYTDLiability(user._id);
-          const quarterlyDates = taxService.getQuarterlyDueDates();
-          
+          const taxInfo = await taxCalculationService.calculateYTDLiability(user._id);
+          const quarterlyDates = taxCalculationService.getUpcomingQuarterlyDates();
+
           const summaryData = {
             summary: {
               weeklyIncome,
@@ -237,8 +237,8 @@ class NotificationScheduler {
             transactions: branding.notifications.weeklySummary.includeTransactions ? transactions : [],
             taxInfo: branding.notifications.weeklySummary.includeTaxInfo ? {
               weeklyTaxSetAside: weeklyIncome * 0.30, // 30% default rate
-              ytdTaxLiability: taxInfo.totalLiability || 0,
-              nextQuarterlyDue: quarterlyDates.find(date => new Date(date.date) > new Date())?.date || quarterlyDates[0].date
+              ytdTaxLiability: taxInfo.estimatedTax || 0,
+              nextQuarterlyDue: quarterlyDates.find(d => !d.isPastDue)?.dueDate || quarterlyDates[0]?.dueDate || null
             } : {}
           };
 

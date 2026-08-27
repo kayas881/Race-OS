@@ -1,13 +1,70 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const PlaidService = require('../services/PlaidService');
+const PlaidService = require('../services/plaidService');
 const PlatformIntegrationService = require('../services/PlatformIntegrationService');
-const CSVImportService = require('../services/CSVImportService');
+const CSVImportService = require('../services/csvImportService');
+const CategorizationService = require('../services/categorization');
 const SubstackService = require('../services/SubstackService');
 const BankIntegration = require('../models/BankIntegration');
+const User = require('../models/User');
 const PlatformIntegration = require('../models/PlatformIntegration');
+const Account = require('../models/Account');
+const Transaction = require('../models/Transaction');
 const multer = require('multer');
+
+// Find-or-create the Account a platform's synced revenue should be recorded against.
+async function getOrCreatePlatformAccount(userId, platform, channelName) {
+  let account = await Account.findOne({ user: userId, platform, accountType: 'creator_platform' });
+  if (!account) {
+    account = new Account({
+      user: userId,
+      accountId: `${platform}-${userId}`,
+      accountName: channelName ? `${channelName} (${platform})` : `${platform} account`,
+      accountType: 'creator_platform',
+      platform,
+      isActive: true
+    });
+    await account.save();
+  }
+  return account;
+}
+
+// Upsert one Transaction per day of a platform's daily revenue breakdown, keyed by a
+// stable transactionId - re-syncing the same day updates the amount instead of creating
+// a duplicate, since sync always re-covers the last 30 days on every call.
+async function upsertDailyRevenueTransactions(userId, platform, account, dailyBreakdown) {
+  let created = 0, updated = 0;
+  for (const day of dailyBreakdown) {
+    if (!day.revenue || day.revenue <= 0) continue;
+
+    const transactionId = `${platform}-${account._id}-${day.date}`;
+    const existed = await Transaction.exists({ transactionId });
+
+    await Transaction.findOneAndUpdate(
+      { transactionId },
+      {
+        user: userId,
+        account: account._id,
+        transactionId,
+        amount: day.revenue,
+        description: `${platform.charAt(0).toUpperCase() + platform.slice(1)} revenue - ${day.date}`,
+        date: new Date(day.date),
+        type: 'income',
+        // 'youtube'/'twitch'/'patreon' match the business-income category list
+        // in services/taxCalculation.js's calculateIncome(), so this counts toward tax.
+        category: { primary: platform, confidence: 1 },
+        businessClassification: 'business',
+        isManual: false
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    if (existed) updated++;
+    else created++;
+  }
+  return { created, updated };
+}
 
 // Configure multer for CSV upload
 const upload = multer({ 
@@ -33,7 +90,10 @@ router.get('/', auth, async (req, res) => {
         description: 'Connect your bank accounts and credit cards',
         category: 'banking',
         isActive: true,
-        setup_required: false
+        setup_required: false,
+        // Automatic bank sync needs Plaid production access, which isn't live yet -
+        // CSV import is the primary way to get bank data in until then.
+        comingSoon: true
       },
       {
         id: 'youtube',
@@ -78,6 +138,21 @@ router.get('/', auth, async (req, res) => {
 
 // Plaid Integration Routes
 
+// Record interest in bank auto-connect (Plaid) while it's gated behind production access.
+router.post('/plaid/waitlist', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user.bankConnectWaitlist?.requested) {
+      user.bankConnectWaitlist = { requested: true, requestedAt: new Date() };
+      await user.save();
+    }
+    res.json({ bankConnectWaitlist: user.bankConnectWaitlist });
+  } catch (error) {
+    console.error('Error recording bank connect waitlist request:', error);
+    res.status(500).json({ error: 'Failed to record request' });
+  }
+});
+
 // Create Plaid link token
 router.post('/plaid/link-token', auth, async (req, res) => {
   try {
@@ -89,35 +164,113 @@ router.post('/plaid/link-token', auth, async (req, res) => {
   }
 });
 
+// Create a Plaid Link token in "update mode" to re-authenticate an existing bank
+// connection (e.g. after the bank requires a fresh login, surfaced via status:'error').
+router.post('/plaid/link-token/update', auth, async (req, res) => {
+  try {
+    const { bankIntegrationId } = req.body;
+    const bankIntegration = await BankIntegration.findOne({
+      _id: bankIntegrationId,
+      user: req.user.id,
+      provider: 'plaid'
+    });
+
+    if (!bankIntegration) {
+      return res.status(404).json({ error: 'Bank integration not found' });
+    }
+
+    const linkToken = await PlaidService.createUpdateLinkToken(req.user.id, bankIntegration.accessToken);
+    res.json({ linkToken });
+  } catch (error) {
+    console.error('Error creating Plaid update link token:', error);
+    res.status(500).json({ error: 'Failed to start reconnect' });
+  }
+});
+
+// Map Plaid's account type/subtype to our Account schema's accountType enum
+function mapPlaidAccountType(plaidType, plaidSubtype) {
+  if (plaidSubtype === 'savings') return 'savings';
+  if (plaidType === 'credit') return 'credit';
+  if (plaidType === 'investment') return 'investment';
+  return 'checking';
+}
+
 // Exchange public token for access token
 router.post('/plaid/exchange-token', auth, async (req, res) => {
   try {
-    const { publicToken, institutionId, accountIds } = req.body;
-    
+    const { publicToken } = req.body;
+
     if (!publicToken) {
       return res.status(400).json({ error: 'Public token is required' });
     }
 
-    const accessToken = await PlaidService.exchangePublicToken(publicToken);
-    
-    // Store bank integration
-    const bankIntegration = new BankIntegration({
-      user: req.user.id,
-      provider: 'plaid',
-      institutionId,
-      accessToken,
-      accountIds: accountIds || [],
-      status: 'connected'
-    });
-    
+    const { accessToken, itemId } = await PlaidService.exchangePublicToken(publicToken);
+    const plaidAccounts = await PlaidService.getAccounts(accessToken);
+
+    let institutionId = null;
+    let institutionName = null;
+    try {
+      const itemStatus = await PlaidService.getItemStatus(accessToken);
+      institutionId = itemStatus.institution_id;
+      if (institutionId) {
+        const institution = await PlaidService.getInstitution(institutionId);
+        institutionName = institution.name;
+      }
+    } catch (lookupError) {
+      // Non-fatal - institution name is cosmetic, the connection itself still works.
+      console.error('Error looking up Plaid institution:', lookupError.message);
+    }
+
+    // Find-or-create + save (not findOneAndUpdate) - Mongoose's update-path casting
+    // mishandles this array-of-subdocuments schema and throws "Cast to string failed"
+    // on the whole accounts array; .save() casts the full document correctly instead.
+    // itemId is the real dedup key - a re-connect for the same bank item must update
+    // tokens/accounts, not create a duplicate integration.
+    let bankIntegration = await BankIntegration.findOne({ user: req.user.id, provider: 'plaid', itemId });
+    if (!bankIntegration) {
+      bankIntegration = new BankIntegration({ user: req.user.id, provider: 'plaid', itemId });
+    }
+    bankIntegration.accessToken = accessToken;
+    bankIntegration.institutionId = institutionId;
+    bankIntegration.institutionName = institutionName;
+    bankIntegration.accounts = plaidAccounts.map(a => ({
+      accountId: a.id,
+      name: a.name,
+      accountType: a.type,
+      accountSubtype: a.subtype,
+      mask: a.mask,
+      balances: { current: a.balance.current, available: a.balance.available, limit: a.balance.limit },
+      isActive: true
+    }));
+    bankIntegration.status = 'connected';
     await bankIntegration.save();
-    
-    // Fetch initial account data
-    const accounts = await PlaidService.getAccounts(accessToken);
-    
-    res.json({ 
+
+    // Create a local Account per Plaid sub-account so synced transactions have
+    // something real to attach to (Transaction.account is a required ref).
+    for (const plaidAccount of plaidAccounts) {
+      await Account.findOneAndUpdate(
+        { user: req.user.id, accountId: plaidAccount.id },
+        {
+          user: req.user.id,
+          accountId: plaidAccount.id,
+          accountName: plaidAccount.name,
+          accountType: mapPlaidAccountType(plaidAccount.type, plaidAccount.subtype),
+          platform: 'plaid',
+          institutionName,
+          balance: {
+            current: plaidAccount.balance.current,
+            available: plaidAccount.balance.available,
+            currency: plaidAccount.balance.currency
+          },
+          isActive: true
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+
+    res.json({
       message: 'Bank connected successfully',
-      accounts,
+      accounts: plaidAccounts,
       integrationId: bankIntegration._id
     });
   } catch (error) {
@@ -141,6 +294,75 @@ router.get('/banks', auth, async (req, res) => {
   }
 });
 
+// Pulls latest Plaid transactions for one bank integration and upserts them as real
+// Transaction documents. Shared by the manual "Sync" button and the Plaid webhook
+// handler below, so both paths behave identically.
+async function syncPlaidBankTransactions(bankIntegration) {
+  const plaidTransactions = await PlaidService.getTransactions(
+    bankIntegration.accessToken,
+    new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Last 30 days
+    new Date()
+  );
+
+  // Turn Plaid transactions into real Transaction documents, upserted by Plaid's own
+  // transaction id so re-syncing overlapping days updates instead of duplicating -
+  // otherwise this data never reaches Dashboard/Reports/Tax Center at all.
+  let created = 0, updated = 0, skipped = 0;
+  for (const txn of plaidTransactions) {
+    const account = await Account.findOne({ user: bankIntegration.user, accountId: txn.account_id });
+    if (!account) { skipped++; continue; }
+
+    const existed = await Transaction.exists({ transactionId: txn.id });
+    // Plaid convention: positive amount = money OUT (expense), negative = money IN (income) -
+    // opposite of how amounts are stored elsewhere in this app (always positive + separate type).
+    const type = txn.amount > 0 ? 'expense' : 'income';
+
+    // Run the same rule-based/ML categorization used for manual + CSV transactions
+    // instead of dumping Plaid's raw (differently-shaped) category taxonomy straight
+    // into the schema - that's what fed the tax deduction math and Reports breakdown.
+    const categorization = await CategorizationService.categorizeTransaction({
+      description: txn.name,
+      merchantName: txn.merchant_name,
+      amount: txn.amount,
+      type,
+      categories: txn.category
+    }, bankIntegration.user);
+
+    await Transaction.findOneAndUpdate(
+      { transactionId: txn.id },
+      {
+        user: bankIntegration.user,
+        account: account._id,
+        transactionId: txn.id,
+        amount: Math.abs(txn.amount),
+        description: txn.name,
+        merchantName: txn.merchant_name,
+        date: new Date(txn.date),
+        type,
+        category: categorization.category,
+        businessClassification: categorization.businessClassification,
+        taxDeductible: categorization.taxDeductible,
+        isManual: false
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    if (existed) updated++; else created++;
+  }
+
+  bankIntegration.lastSyncAt = new Date();
+  // A successful sync means the item is healthy again - clear any stale error status
+  // (e.g. set by a prior ITEM/ERROR webhook) so the UI stops prompting to reconnect.
+  bankIntegration.status = 'connected';
+  bankIntegration.errorMessage = undefined;
+  await bankIntegration.save();
+
+  return {
+    transactionCount: plaidTransactions.length,
+    transactionsSynced: { created, updated, skipped },
+    transactions: plaidTransactions
+  };
+}
+
 // Sync bank transactions
 router.post('/banks/:id/sync', auth, async (req, res) => {
   try {
@@ -148,26 +370,19 @@ router.post('/banks/:id/sync', auth, async (req, res) => {
       _id: req.params.id,
       user: req.user.id
     });
-    
+
     if (!bankIntegration) {
       return res.status(404).json({ error: 'Bank integration not found' });
     }
-    
+
     if (bankIntegration.provider === 'plaid') {
-      const transactions = await PlaidService.getTransactions(
-        bankIntegration.accessToken,
-        new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Last 30 days
-        new Date()
-      );
-      
-      // Update last sync time
-      bankIntegration.lastSyncAt = new Date();
-      await bankIntegration.save();
-      
-      res.json({ 
+      const result = await syncPlaidBankTransactions(bankIntegration);
+
+      res.json({
         message: 'Sync completed',
-        transactionCount: transactions.length,
-        transactions: transactions.slice(0, 10) // Return first 10 for preview
+        transactionCount: result.transactionCount,
+        transactionsSynced: result.transactionsSynced,
+        transactions: result.transactions.slice(0, 10) // Return first 10 for preview
       });
     } else {
       res.status(400).json({ error: 'Unsupported provider for sync' });
@@ -175,6 +390,40 @@ router.post('/banks/:id/sync', auth, async (req, res) => {
   } catch (error) {
     console.error('Error syncing bank transactions:', error);
     res.status(500).json({ error: 'Failed to sync transactions' });
+  }
+});
+
+// Plaid webhook - called directly by Plaid's servers, not the frontend, so there's no
+// auth header to check. The item_id in the payload is how we find the right integration.
+// Always responds 200 (even on internal errors) since a non-2xx makes Plaid retry the
+// same webhook repeatedly.
+router.post('/plaid/webhook', async (req, res) => {
+  try {
+    const { webhook_type, webhook_code, item_id, error: webhookError } = req.body;
+    console.log(`Plaid webhook received: ${webhook_type}/${webhook_code} for item ${item_id}`);
+
+    const bankIntegration = await BankIntegration.findOne({ provider: 'plaid', itemId: item_id });
+    if (!bankIntegration) {
+      console.warn(`Plaid webhook for unknown item ${item_id} - no matching BankIntegration`);
+      return res.status(200).json({ received: true });
+    }
+
+    if (webhook_type === 'TRANSACTIONS' &&
+        ['INITIAL_UPDATE', 'HISTORICAL_UPDATE', 'DEFAULT_UPDATE', 'SYNC_UPDATES_AVAILABLE'].includes(webhook_code)) {
+      await syncPlaidBankTransactions(bankIntegration);
+    } else if (webhook_type === 'ITEM' && (webhook_code === 'ERROR' || webhook_code === 'PENDING_EXPIRATION')) {
+      // Most commonly ITEM_LOGIN_REQUIRED - the user needs to go through Plaid Link's
+      // "update mode" to re-authenticate. Surface it so the UI can prompt for that.
+      bankIntegration.status = 'error';
+      bankIntegration.errorMessage = webhookError?.error_message
+        || (webhook_code === 'PENDING_EXPIRATION' ? 'Access to this bank is expiring soon - please reconnect.' : 'Plaid reported an error with this connection - please reconnect.');
+      await bankIntegration.save();
+    }
+
+    res.status(200).json({ received: true });
+  } catch (error) {
+    console.error('Error handling Plaid webhook:', error);
+    res.status(200).json({ received: true });
   }
 });
 
@@ -381,14 +630,23 @@ router.post('/platforms/:id/sync', auth, async (req, res) => {
     }
     
     // Update platform with new revenue data
- // This part should now work without validation errors
-    platform.revenueData.push(revenueData); 
+    platform.revenueData.push(revenueData);
     platform.lastSyncAt = new Date();
     await platform.save();
-    
+
+    // Turn synced revenue into real Transactions so it actually flows into the
+    // Dashboard/Reports/Tax Center - otherwise it just sits in this record, invisible
+    // everywhere else in the app.
+    let transactionsSynced = { created: 0, updated: 0 };
+    if (platform.platform === 'youtube' && revenueData.dailyBreakdown?.length) {
+      const account = await getOrCreatePlatformAccount(req.user.id, 'youtube', revenueData.channelName);
+      transactionsSynced = await upsertDailyRevenueTransactions(req.user.id, 'youtube', account, revenueData.dailyBreakdown);
+    }
+
     res.json({
       message: 'Platform data synced successfully',
-      revenueData
+      revenueData,
+      transactionsSynced
     });
   } catch (error) {
     console.error('Error syncing platform data:', error);
@@ -399,11 +657,27 @@ router.post('/platforms/:id/sync', auth, async (req, res) => {
 // Disconnect integration
 router.delete('/banks/:id', auth, async (req, res) => {
   try {
-    await BankIntegration.findOneAndUpdate(
-      { _id: req.params.id, user: req.user.id },
-      { isActive: false, status: 'disconnected' }
-    );
-    
+    const bankIntegration = await BankIntegration.findOne({ _id: req.params.id, user: req.user.id });
+    if (!bankIntegration) {
+      return res.status(404).json({ error: 'Bank integration not found' });
+    }
+
+    if (bankIntegration.provider === 'plaid' && bankIntegration.accessToken) {
+      try {
+        // Revoke the token at Plaid too - otherwise the Item stays live (and billable)
+        // on Plaid's side forever after a user "disconnects" in the app.
+        await PlaidService.removeItem(bankIntegration.accessToken);
+      } catch (removeError) {
+        // Already-revoked/invalid tokens shouldn't block the user from disconnecting
+        // locally - log it and continue.
+        console.error('Error removing Plaid item during disconnect:', removeError.message);
+      }
+    }
+
+    bankIntegration.isActive = false;
+    bankIntegration.status = 'disconnected';
+    await bankIntegration.save();
+
     res.json({ message: 'Bank disconnected successfully' });
   } catch (error) {
     console.error('Error disconnecting bank:', error);

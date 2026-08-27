@@ -1,7 +1,14 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 
 const UserSchema = new mongoose.Schema({
+  // Clerk is the source of truth for identity/auth - this links a Clerk user to
+  // their app data. Populated by the auth middleware on first sight of a new Clerk
+  // session (find-or-create), and kept in sync by the Clerk webhook thereafter.
+  clerkId: {
+    type: String,
+    required: true,
+    unique: true
+  },
   email: {
     type: String,
     required: true,
@@ -9,20 +16,18 @@ const UserSchema = new mongoose.Schema({
     lowercase: true,
     trim: true
   },
-  password: {
-    type: String,
-    required: true,
-    minlength: 6
-  },
+  // Not required - Clerk doesn't guarantee these are populated (e.g. email-only
+  // sign-up, some OAuth providers), and the auth middleware must be able to create
+  // this record synchronously on first sight rather than fail the request.
   firstName: {
     type: String,
-    required: true,
-    trim: true
+    trim: true,
+    default: ''
   },
   lastName: {
     type: String,
-    required: true,
-    trim: true
+    trim: true,
+    default: ''
   },
   businessName: {
     type: String,
@@ -44,19 +49,13 @@ const UserSchema = new mongoose.Schema({
       enum: ['US', 'IN'],
       default: 'US'
     },
-    // US-specific tax info
-    federalTaxRate: {
-      type: Number,
-      default: 0.22 // Default 22% bracket
-    },
-    stateTaxRate: {
-      type: Number,
-      default: 0.05 // Default 5% state tax
-    },
-    selfEmploymentTaxRate: {
-      type: Number,
-      default: 0.1413 // 14.13% for self-employment
-    },
+    // US-specific tax info. These are OPTIONAL user overrides - when unset, the tax
+    // engine (services/taxCalculation.js) uses its real progressive brackets / per-state
+    // table / standard SE rate instead. They must have no default: a truthy default here
+    // would silently override the accurate calculation for every user, always.
+    federalTaxRate: Number,
+    stateTaxRate: Number,
+    selfEmploymentTaxRate: Number,
     state: String,
     ein: String, // Employer Identification Number
     
@@ -114,14 +113,19 @@ const UserSchema = new mongoose.Schema({
       }
     }
   },
-  isEmailVerified: {
-    type: Boolean,
-    default: false
+  // Set when a user asks to be notified once bank auto-connect (Plaid) ships -
+  // it's gated behind Plaid production approval, so this doubles as a demand signal.
+  bankConnectWaitlist: {
+    requested: {
+      type: Boolean,
+      default: false
+    },
+    requestedAt: Date
   },
-  emailVerificationToken: String,
-  passwordResetToken: String,
-  passwordResetExpires: Date,
   lastLogin: Date,
+  // Set by the Clerk webhook on user.deleted. Not acted on anywhere yet (no cascading
+  // delete/anonymization of their financial records) - purely a record for now.
+  deletedAt: Date,
   createdAt: {
     type: Date,
     default: Date.now
@@ -132,29 +136,11 @@ const UserSchema = new mongoose.Schema({
   }
 });
 
-// Hash password before saving
-UserSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  
-  try {
-    const salt = await bcrypt.genSalt(12);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
-
 // Update updatedAt on save
 UserSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
 });
-
-// Compare password method
-UserSchema.methods.comparePassword = async function(candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.password);
-};
 
 // Get full name
 UserSchema.virtual('fullName').get(function() {

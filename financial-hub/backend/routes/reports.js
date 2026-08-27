@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const Transaction = require('../models/Transaction');
-const Category = require('../models/Category');
+const taxCalculationService = require('../services/taxCalculation');
 
 // @route   GET /api/reports/analytics
 // @desc    Get comprehensive analytics data
@@ -35,18 +35,15 @@ router.get('/analytics', auth, async (req, res) => {
 
     // Get all transactions in the period
     const transactions = await Transaction.find({
-      userId,
+      user: userId,
       date: { $gte: startDate, $lte: endDate }
-    }).populate('category').sort({ date: 1 });
-
-    // Get categories for reference
-    const categories = await Category.find({ userId });
+    }).sort({ date: 1 });
 
     // Generate cashflow data by month
     const cashflowData = generateCashflowData(transactions, startDate, endDate);
-    
+
     // Generate category breakdown
-    const categoryBreakdown = generateCategoryBreakdown(transactions, categories);
+    const categoryBreakdown = generateCategoryBreakdown(transactions);
     
     // Calculate summary statistics
     const summary = calculateSummary(transactions);
@@ -91,15 +88,17 @@ function generateCashflowData(transactions, startDate, endDate) {
     current.setMonth(current.getMonth() + 1);
   }
 
-  // Aggregate transactions by month
+  // Aggregate transactions by month. Amounts are always stored as positive values
+  // (see routes/transactions.js and services/csvImportService.js) - `type` is the
+  // actual income/expense indicator, not the sign of `amount`.
   transactions.forEach(transaction => {
     const monthKey = transaction.date.toISOString().slice(0, 7);
-    
+
     if (monthlyData[monthKey]) {
-      if (transaction.amount > 0) {
+      if (transaction.type === 'income') {
         monthlyData[monthKey].income += transaction.amount;
-      } else {
-        monthlyData[monthKey].expenses += Math.abs(transaction.amount);
+      } else if (transaction.type === 'expense') {
+        monthlyData[monthKey].expenses += transaction.amount;
       }
     }
   });
@@ -112,35 +111,39 @@ function generateCashflowData(transactions, startDate, endDate) {
   return Object.values(monthlyData);
 }
 
+// Turn a category slug like "office_supplies" into a readable label "Office Supplies".
+// Bucketing directly on the slug (rather than matching against the separate Category
+// collection's display names) means this always reflects real transaction data instead
+// of silently dumping everything into "Uncategorized" when the wording doesn't line up.
+function humanizeCategorySlug(slug) {
+  return slug
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 // Helper function to generate category breakdown
-function generateCategoryBreakdown(transactions, categories) {
+function generateCategoryBreakdown(transactions) {
   const categoryTotals = {};
 
-  // Initialize categories
-  categories.forEach(category => {
-    categoryTotals[category._id] = {
-      name: category.name,
-      amount: 0,
-      count: 0
-    };
-  });
-
-  // Add uncategorized
-  categoryTotals['uncategorized'] = {
-    name: 'Uncategorized',
-    amount: 0,
-    count: 0
-  };
-
-  // Aggregate expenses by category (only negative amounts)
+  // Aggregate expenses by category
   transactions.forEach(transaction => {
-    if (transaction.amount < 0) {
-      const categoryId = transaction.category?._id || 'uncategorized';
-      
-      if (categoryTotals[categoryId]) {
-        categoryTotals[categoryId].amount += Math.abs(transaction.amount);
-        categoryTotals[categoryId].count += 1;
+    if (transaction.type === 'expense') {
+      const primary = transaction.category?.primary?.toLowerCase().trim();
+      const key = primary || 'uncategorized';
+
+      if (!categoryTotals[key]) {
+        categoryTotals[key] = {
+          name: key === 'uncategorized' ? 'Uncategorized' : humanizeCategorySlug(key),
+          amount: 0,
+          count: 0
+        };
       }
+
+      categoryTotals[key].amount += transaction.amount;
+      categoryTotals[key].count += 1;
     }
   });
 
@@ -161,10 +164,10 @@ function calculateSummary(transactions) {
   };
 
   transactions.forEach(transaction => {
-    if (transaction.amount > 0) {
+    if (transaction.type === 'income') {
       summary.totalIncome += transaction.amount;
-    } else {
-      summary.totalExpenses += Math.abs(transaction.amount);
+    } else if (transaction.type === 'expense') {
+      summary.totalExpenses += transaction.amount;
     }
   });
 
@@ -211,7 +214,7 @@ async function generateTaxForecast(transactions, userId, summary) {
     const yearEnd = new Date(currentYear, 11, 31);
 
     const yearTransactions = await Transaction.find({
-      userId,
+      user: userId,
       date: { $gte: yearStart, $lte: yearEnd }
     });
 
@@ -235,12 +238,11 @@ async function generateTaxForecast(transactions, userId, summary) {
     // Generate AI recommendations
     const recommendations = generateTaxRecommendations(yearSummary, projectedYearNet);
 
-    // Upcoming tax dates
-    const upcomingDates = [
-      { description: 'Q4 2025 Estimated Tax', date: 'Jan 15, 2026' },
-      { description: 'Annual Tax Return', date: 'Apr 15, 2026' },
-      { description: 'Q1 2026 Estimated Tax', date: 'Apr 15, 2026' }
-    ];
+    // Upcoming tax dates - computed relative to today, never hardcoded to a specific year
+    const upcomingDates = taxCalculationService.getUpcomingQuarterlyDates().map(d => ({
+      description: `${d.quarter} Estimated Tax`,
+      date: new Date(d.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    }));
 
     return {
       currentQuarter: currentQuarterTax,

@@ -14,6 +14,7 @@ import {
 } from '@heroicons/react/24/outline';
 import CategorizationModal from '../components/CategorizationModal';
 import ManualTransactionModal from '../components/ManualTransactionModal';
+import { apiFetch } from '../utils/api';
 
 const Transactions = () => {
   const [transactions, setTransactions] = useState([]);
@@ -46,9 +47,7 @@ const Transactions = () => {
         ...filters
       });
 
-      const response = await fetch(`/api/transactions?${params}`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
+      const response = await apiFetch(`api/transactions?${params}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -193,19 +192,40 @@ const Transactions = () => {
             />
           </div>
 
-          {/* Category Filter */}
+          {/* Category Filter - options mirror the slugs services/categorization.js
+              actually assigns (backend/routes/transactions.js:50 matches category.primary
+              exactly), not an arbitrary hand-picked subset */}
           <select
             value={filters.category}
             onChange={(e) => handleFilterChange('category', e.target.value)}
             className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">All Categories</option>
-            <option value="ad_revenue">Ad Revenue</option>
-            <option value="sponsorship">Sponsorship</option>
-            <option value="equipment">Equipment</option>
-            <option value="software">Software</option>
-            <option value="groceries">Groceries</option>
-            <option value="utilities">Utilities</option>
+            <optgroup label="Income">
+              <option value="ad_revenue">Ad Revenue</option>
+              <option value="sponsorship">Sponsorship</option>
+              <option value="subscription">Subscription</option>
+              <option value="donation">Donation</option>
+              <option value="merchandise">Merchandise</option>
+              <option value="affiliate">Affiliate</option>
+            </optgroup>
+            <optgroup label="Business Expenses">
+              <option value="equipment">Equipment</option>
+              <option value="software">Software</option>
+              <option value="internet_phone">Internet & Phone</option>
+              <option value="office_supplies">Office Supplies</option>
+              <option value="marketing">Marketing</option>
+              <option value="education">Education</option>
+              <option value="travel">Travel</option>
+              <option value="meals">Meals</option>
+            </optgroup>
+            <optgroup label="Personal">
+              <option value="groceries">Groceries</option>
+              <option value="utilities">Utilities</option>
+              <option value="rent_mortgage">Rent & Mortgage</option>
+              <option value="personal_care">Personal Care</option>
+            </optgroup>
+            <option value="other">Other</option>
           </select>
 
           {/* Type Filter */}
