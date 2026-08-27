@@ -103,8 +103,14 @@ if (process.env.NODE_ENV !== 'production') {
   app.use('/api/demo', require('./routes/demo'));
 }
 
-// Serve uploaded files
-app.use('/uploads', express.static('uploads'));
+// Serve uploaded files. Helmet's default Cross-Origin-Resource-Policy is
+// 'same-origin', which blocks the frontend (a different origin on Vercel),
+// emails, and Puppeteer-rendered invoice PDFs from loading these images at
+// all - branding logos need to be embeddable everywhere, so relax it here.
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static('uploads'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
