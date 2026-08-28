@@ -239,10 +239,14 @@ router.get('/', auth, async (req, res) => {
       }
     ]);
 
-    // Tax jar status
+    // Tax jar status. taxJarAmount is stored as a plain Number (see
+    // models/TaxCalculation.js) - reading it as an {amount, percentage} object
+    // silently produced undefined -> 0 every time, regardless of the real value.
+    const taxJarAmount = taxCalculation?.recommendations?.taxJarAmount || 0;
+    const taxJarIncomeBasis = taxCalculation?.income?.businessIncome || 0;
     const taxJarStatus = {
-      currentAmount: taxCalculation?.recommendations?.taxJarAmount?.amount || 0,
-      targetPercentage: taxCalculation?.recommendations?.taxJarAmount?.percentage || 0.25,
+      currentAmount: taxJarAmount,
+      targetPercentage: taxJarIncomeBasis > 0 ? taxJarAmount / taxJarIncomeBasis : 0.25,
       nextQuarterlyDue: taxCalculation?.recommendations?.nextQuarterlyDue,
       estimatedQuarterlyPayment: taxCalculation?.taxCalculations?.estimatedQuarterlyPayment || 0,
       recommendations: taxCalculation?.recommendations?.taxStrategy || ''
@@ -367,7 +371,9 @@ router.get('/quick-stats', auth, async (req, res) => {
     const quickStats = {
       monthlyIncome: monthlyIncome[0]?.total || 0,
       totalBalance: totalBalance[0]?.total || 0,
-      taxJarAmount: currentTaxCalc?.recommendations?.taxJarAmount?.amount || 0,
+      // taxJarAmount is a plain Number (see models/TaxCalculation.js), not an
+      // {amount, ...} object - see the same fix in GET / above.
+      taxJarAmount: currentTaxCalc?.recommendations?.taxJarAmount || 0,
       nextQuarterlyDue: currentTaxCalc?.recommendations?.nextQuarterlyDue
     };
 

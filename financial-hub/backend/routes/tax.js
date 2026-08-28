@@ -171,7 +171,10 @@ router.get('/summary', auth, async (req, res) => {
       yearToDate: ytdTotals,
       quarterlyBreakdown: allQuarters,
       nextQuarterlyDue: yearlyTax?.recommendations?.nextQuarterlyDue || null,
-      taxJarRecommendation: yearlyTax?.recommendations?.taxJarAmount || { percentage: 0.25, amount: 0 }
+      // taxJarAmount is a plain Number (see models/TaxCalculation.js) - the object
+      // fallback here previously made this field's type depend on whether data
+      // existed (number when present, {percentage, amount} object when absent).
+      taxJarRecommendation: yearlyTax?.recommendations?.taxJarAmount || 0
     };
 
     res.json(summary);

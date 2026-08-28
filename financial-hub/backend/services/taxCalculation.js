@@ -179,16 +179,29 @@ class TaxCalculationService {
     const adjustedGrossIncome = incomeData.businessIncome - expenseData.deductibleExpenses;
     const selfEmploymentIncome = Math.max(0, adjustedGrossIncome);
 
-    const selfEmploymentTax = this.calculateSelfEmploymentTax(selfEmploymentIncome, user.taxInfo.selfEmploymentTaxRate);
-    const federalTaxOwed = this.calculateFederalIncomeTax(adjustedGrossIncome, user.taxInfo.filingStatus, user.taxInfo.federalTaxRate);
-    const stateTaxOwed = this.calculateStateTax(adjustedGrossIncome, user.taxInfo.state, user.taxInfo.stateTaxRate);
+    // Federal brackets and the standard deduction are annual figures. incomeData/
+    // expenseData only cover a single quarter's date range when `quarter` is set
+    // (see calculateTaxes above), so that income must be annualized (x4) before
+    // running it through calculateFederalIncomeTax/calculateStateTax/
+    // calculateSelfEmploymentTax, then the resulting annual liability apportioned
+    // back down to this quarter's share - otherwise a quarter's income gets taxed
+    // as if it were the entire year's, understating the true marginal rate (this
+    // matches the convention getQuarterlyTaxSummary already uses correctly).
+    const annualizationFactor = quarter ? 4 : 1;
+    const annualizedIncome = adjustedGrossIncome * annualizationFactor;
 
+    const annualSelfEmploymentTax = this.calculateSelfEmploymentTax(Math.max(0, annualizedIncome), user.taxInfo.selfEmploymentTaxRate);
+    const annualFederalTaxOwed = this.calculateFederalIncomeTax(annualizedIncome, user.taxInfo.filingStatus, user.taxInfo.federalTaxRate);
+    const annualStateTaxOwed = this.calculateStateTax(annualizedIncome, user.taxInfo.state, user.taxInfo.stateTaxRate);
+    const annualTotalTaxOwed = annualFederalTaxOwed + annualStateTaxOwed + annualSelfEmploymentTax;
+
+    const selfEmploymentTax = annualSelfEmploymentTax / annualizationFactor;
+    const federalTaxOwed = annualFederalTaxOwed / annualizationFactor;
+    const stateTaxOwed = annualStateTaxOwed / annualizationFactor;
     const totalTaxOwed = federalTaxOwed + stateTaxOwed + selfEmploymentTax;
-    const estimatedQuarterlyPayment = quarter ? 
-      this.calculateAnnualTaxLiability(adjustedGrossIncome * (4 / quarter), user) / 4 : 
-      totalTaxOwed / 4;
+    const estimatedQuarterlyPayment = annualTotalTaxOwed / 4;
 
-    const taxJarAmount = this.calculateTaxJarRecommendation(incomeData.totalIncome, totalTaxOwed, quarter);
+    const taxJarAmount = this.calculateTaxJarRecommendation(incomeData.totalIncome, totalTaxOwed);
     const recommendations = await this.generateRecommendations(userId, incomeData, expenseData, totalTaxOwed, year, quarter);
 
     const taxCalculation = new TaxCalculation({
@@ -505,14 +518,12 @@ class TaxCalculationService {
     return federalTax + stateTax + selfEmploymentTax;
   }
 
-  calculateTaxJarRecommendation(totalIncome, totalTaxOwed, quarter) {
+  // totalIncome/totalTaxOwed are already scoped to whatever period was
+  // calculated (a full year, or a single quarter - see calculateUSTaxes, which
+  // annualizes internally before apportioning back down) - no further
+  // annualizing needed here, just a 10% buffer with a 25%-of-income floor.
+  calculateTaxJarRecommendation(totalIncome, totalTaxOwed) {
     const baseRecommendation = totalTaxOwed * 1.1;
-    
-    if (quarter) {
-      const annualizedTaxOwed = totalTaxOwed * (4 / quarter);
-      return annualizedTaxOwed * 1.1;
-    }
-    
     return Math.max(baseRecommendation, totalIncome * 0.25);
   }
 

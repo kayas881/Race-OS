@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const Transaction = require('../models/Transaction');
+const User = require('../models/User');
 const taxCalculationService = require('../services/taxCalculation');
 
 // @route   GET /api/reports/analytics
@@ -205,38 +206,38 @@ function calculateTrends(transactions, startDate, endDate) {
   };
 }
 
-// AI-powered tax forecasting function
+// Tax forecasting function. Previously computed its own numbers from a flat
+// 25%-of-net-cashflow heuristic over ALL transactions (including personal
+// ones, unlike the real engine which only taxes business-classified income) -
+// that meant this page could show a materially different "tax owed" figure
+// than the Tax Center for the exact same period, with no indication the two
+// were even measuring different things. Now sourced from the same engine
+// (services/taxCalculation.js) so the numbers agree everywhere they're shown.
 async function generateTaxForecast(transactions, userId, summary) {
   try {
-    // Get current year transactions for better forecasting
     const currentYear = new Date().getFullYear();
-    const yearStart = new Date(currentYear, 0, 1);
-    const yearEnd = new Date(currentYear, 11, 31);
 
-    const yearTransactions = await Transaction.find({
-      user: userId,
-      date: { $gte: yearStart, $lte: yearEnd }
-    });
+    const [user, quarterlySummary, ytdLiability] = await Promise.all([
+      User.findById(userId),
+      taxCalculationService.getQuarterlyTaxSummary(userId, currentYear),
+      taxCalculationService.calculateYTDLiability(userId, currentYear)
+    ]);
 
-    const yearSummary = calculateSummary(yearTransactions);
-    
-    // Current quarter calculation
-    const currentQuarter = Math.floor(new Date().getMonth() / 3) + 1;
-    const quarterProgress = (new Date().getMonth() % 3 + 1) / 3;
-    
-    // Project quarterly income based on current progress
-    const projectedQuarterlyIncome = yearSummary.totalIncome / quarterProgress;
-    const currentQuarterTax = projectedQuarterlyIncome * 0.25; // 25% estimated rate
+    const currentQuarterKey = taxCalculationService.getCurrentQuarter();
+    const currentQuarterTax = quarterlySummary[currentQuarterKey]?.estimatedTax || 0;
 
-    // Project year-end based on current trends
+    // Project full-year business net income from YTD business income/expenses
+    // (not the unfiltered "all transactions" total), then run it through the
+    // real bracket/state/self-employment engine instead of a flat 25%.
     const monthsElapsed = new Date().getMonth() + 1;
-    const projectedYearIncome = (yearSummary.totalIncome / monthsElapsed) * 12;
-    const projectedYearExpenses = (yearSummary.totalExpenses / monthsElapsed) * 12;
-    const projectedYearNet = projectedYearIncome - projectedYearExpenses;
-    const yearEndTax = Math.max(0, projectedYearNet * 0.25);
+    const projectedYearIncome = (ytdLiability.totalIncome / monthsElapsed) * 12;
+    const projectedYearExpenses = (ytdLiability.totalDeductions / monthsElapsed) * 12;
+    const projectedYearNet = Math.max(0, projectedYearIncome - projectedYearExpenses);
+    const yearEndTax = user ? taxCalculationService.calculateAnnualTaxLiability(projectedYearNet, user) : 0;
 
-    // Generate AI recommendations
-    const recommendations = generateTaxRecommendations(yearSummary, projectedYearNet);
+    // Recommendation heuristics stay based on the selected report-period summary
+    // (unfiltered) - these are suggestion prompts, not dollar-exact tax figures.
+    const recommendations = generateTaxRecommendations(summary, projectedYearNet);
 
     // Upcoming tax dates - computed relative to today, never hardcoded to a specific year
     const upcomingDates = taxCalculationService.getUpcomingQuarterlyDates().map(d => ({
@@ -247,7 +248,7 @@ async function generateTaxForecast(transactions, userId, summary) {
     return {
       currentQuarter: currentQuarterTax,
       yearEnd: yearEndTax,
-      confidence: calculateConfidence(yearTransactions.length),
+      confidence: calculateConfidence(summary.transactionCount),
       recommendations,
       upcomingDates,
       projectedIncome: projectedYearIncome,

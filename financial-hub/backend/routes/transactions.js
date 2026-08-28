@@ -189,14 +189,22 @@ router.post('/manual', auth, [
     } = req.body;
 
     // Verify account ownership
-    const account = await Account.findOne({ 
-      _id: accountId, 
-      user: req.user.id 
+    const account = await Account.findOne({
+      _id: accountId,
+      user: req.user.id
     });
 
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
     }
+
+    // Every other creation path (Plaid sync, CSV import) stores amount as a
+    // positive magnitude with `type` carrying the income/expense direction -
+    // dashboard/reports aggregates sum `amount` directly assuming that
+    // invariant, so a manually-entered negative amount would silently corrupt
+    // those sums (the tax engine happens to Math.abs() everywhere, masking it
+    // there, but nothing else does).
+    const normalizedAmount = Math.abs(parseFloat(amount));
 
     // Auto-categorize if not provided
     let finalCategory = category;
@@ -207,7 +215,7 @@ router.post('/manual', auth, [
       const categorization = await categorizationService.categorizeTransaction({
         description,
         merchantName,
-        amount: parseFloat(amount),
+        amount: normalizedAmount,
         type
       }, req.user.id);
       finalCategory = categorization.category;
@@ -219,7 +227,7 @@ router.post('/manual', auth, [
       user: req.user.id,
       account: accountId,
       transactionId: `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      amount: parseFloat(amount),
+      amount: normalizedAmount,
       description,
       merchantName,
       date: new Date(date),
